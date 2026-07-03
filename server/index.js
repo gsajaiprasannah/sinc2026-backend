@@ -86,6 +86,22 @@ app.post('/api/admin/backup-now', requireAuth, async (req, res) => {
   }
 });
 
+// One-click import of the real host-member / committee / payment data (from
+// the SINC2026 "Host members Record Sheet" Excel file) plus the congress
+// itinerary — same logic as server/scripts/seed-host-data.js, exposed here so
+// a super admin can (re-)run it from the Settings tab instead of needing
+// shell access to the server. Safe to run more than once — matches existing
+// host_members rows by phone number and updates rather than duplicates.
+app.post('/api/admin/seed-host-data', requireSuperAdmin, async (req, res) => {
+  try {
+    const { runSeed } = require('./seedHostData');
+    const summary = await runSeed();
+    res.json(summary);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Creates the very first login (super_admin) from ADMIN_USER/ADMIN_PASSWORD
 // the first time the server ever boots against a fresh database. A no-op on
 // every later boot once at least one user row exists. From then on, all
