@@ -129,10 +129,57 @@ async function initSchema() {
       posted_by TEXT,
       happened_at TIMESTAMP DEFAULT NOW()
     );
+
+    CREATE TABLE IF NOT EXISTS users (
+      id SERIAL PRIMARY KEY,
+      username TEXT NOT NULL UNIQUE,
+      email TEXT,
+      password_hash TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'admin' CHECK (role IN ('super_admin','admin')),
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected','disabled')),
+      created_at TIMESTAMP DEFAULT NOW(),
+      approved_at TIMESTAMP,
+      approved_by INTEGER REFERENCES users(id)
+    );
   `);
 
   // Safe to run repeatedly — adds the column only if an older schema is missing it.
   await pool.query(`ALTER TABLE participants ADD COLUMN IF NOT EXISTS dietary_preference TEXT;`);
+
+  // --- Per-participant Registration ID (e.g. SINC2026-0001) ---
+  // One code per participant row, assigned automatically on insert via a DB
+  // trigger + sequence — so a single registration yields one code and a
+  // double registration yields two (one per person), with no app-level
+  // race condition even under concurrent CSV imports.
+  await pool.query(`ALTER TABLE participants ADD COLUMN IF NOT EXISTS participant_code TEXT;`);
+  await pool.query(`CREATE SEQUENCE IF NOT EXISTS participant_code_seq START 1;`);
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION set_participant_code() RETURNS TRIGGER AS $$
+    BEGIN
+      IF NEW.participant_code IS NULL THEN
+        NEW.participant_code := 'SINC2026-' || LPAD(nextval('participant_code_seq')::text, 4, '0');
+      END IF;
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+  `);
+  await pool.query(`DROP TRIGGER IF EXISTS trg_set_participant_code ON participants;`);
+  await pool.query(`
+    CREATE TRIGGER trg_set_participant_code BEFORE INSERT ON participants
+    FOR EACH ROW EXECUTE FUNCTION set_participant_code();
+  `);
+  // Backfill any rows that predate this column (e.g. the original real-data
+  // seed), in creation order, then fast-forward the sequence past them.
+  await pool.query(`
+    WITH ordered AS (
+      SELECT id, ROW_NUMBER() OVER (ORDER BY created_at, id) AS rn
+      FROM participants WHERE participant_code IS NULL
+    )
+    UPDATE participants p SET participant_code = 'SINC2026-' || LPAD(o.rn::text, 4, '0')
+    FROM ordered o WHERE p.id = o.id;
+  `);
+  await pool.query(`SELECT setval('participant_code_seq', GREATEST((SELECT COUNT(*) FROM participants), 1));`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS participants_code_uidx ON participants(participant_code);`);
 }
 
 module.exports = { pool, all, get, run, transaction, initSchema };

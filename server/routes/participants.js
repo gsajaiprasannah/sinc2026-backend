@@ -14,6 +14,56 @@ const FIELDS = [
   'pickup_by', 'pickup_vehicle', 'pickup_phone', 'spoc_name', 'spoc_phone', 'notes'
 ];
 
+// --- Duplicate-entry protection ---
+// The same person often gets entered more than once (a CSV re-import, a
+// second WhatsApp form submission, manual double entry). We treat two rows
+// as the "same person" only when the name matches AND at least one strong
+// identifier (phone or email) also matches — name alone is too common
+// (many "Ramesh Kumar"s) to safely auto-block on.
+function normName(n) {
+  return (n || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+function normPhone(p) {
+  return (p || '').replace(/\D/g, '').slice(-10);
+}
+function normEmail(e) {
+  return (e || '').trim().toLowerCase();
+}
+
+async function findDuplicate(runner, { name, phone, email, excludeId }) {
+  const nn = normName(name);
+  if (!nn) return null;
+  const np = normPhone(phone);
+  const ne = normEmail(email);
+  if (!np && !ne) return null; // not enough signal to safely flag as a duplicate
+
+  const conditions = [];
+  const params = [nn];
+  let idx = 2;
+  if (np) {
+    conditions.push(`RIGHT(regexp_replace(COALESCE(p.phone,''), '[^0-9]', '', 'g'), 10) = $${idx}`);
+    params.push(np);
+    idx++;
+  }
+  if (ne) {
+    conditions.push(`lower(trim(COALESCE(p.email,''))) = $${idx}`);
+    params.push(ne);
+    idx++;
+  }
+  let sql = `
+    SELECT p.id, p.name, p.phone, p.email, p.participant_code, r.reg_number
+    FROM participants p
+    LEFT JOIN registrations r ON r.id = p.registration_id
+    WHERE lower(trim(p.name)) = $1 AND (${conditions.join(' OR ')})
+  `;
+  if (excludeId) {
+    sql += ` AND p.id <> $${idx}`;
+    params.push(excludeId);
+  }
+  sql += ' LIMIT 1';
+  return runner.get(sql, params);
+}
+
 router.get('/', async (req, res) => {
   try {
     const search = req.query.q ? `%${req.query.q}%` : null;
@@ -58,15 +108,26 @@ router.get('/:id', async (req, res) => {
 router.post('/', async (req, res) => {
   const body = req.body;
   if (!body.name) return res.status(400).json({ error: 'name is required' });
-  const cols = FIELDS.filter((f) => body[f] !== undefined);
-  const placeholders = cols.map((_, i) => `$${i + 1}`).join(',');
-  const values = cols.map((c) => body[c]);
   try {
+    if (!body.force) {
+      const dup = await findDuplicate(db, { name: body.name, phone: body.phone, email: body.email });
+      if (dup) {
+        return res.status(409).json({
+          error: 'duplicate',
+          message: `A participant named "${dup.name}" with a matching phone/email already exists (Registration ID ${dup.participant_code || '—'}, Reg# ${dup.reg_number || '—'}). Save anyway?`,
+          existing: dup
+        });
+      }
+    }
+    const cols = FIELDS.filter((f) => body[f] !== undefined);
+    const placeholders = cols.map((_, i) => `$${i + 1}`).join(',');
+    const values = cols.map((c) => body[c]);
     const result = await db.run(
-      `INSERT INTO participants (${cols.join(',')}) VALUES (${placeholders}) RETURNING id`,
+      `INSERT INTO participants (${cols.join(',')}) VALUES (${placeholders}) RETURNING id, participant_code`,
       values
     );
-    res.json({ id: result.id });
+    const row = result.rows[0] || {};
+    res.json({ id: row.id, participant_code: row.participant_code });
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
@@ -74,11 +135,27 @@ router.post('/', async (req, res) => {
 
 router.put('/:id', async (req, res) => {
   const body = req.body;
-  const cols = FIELDS.filter((f) => body[f] !== undefined);
-  if (cols.length === 0) return res.json({ ok: true });
-  const setClause = cols.map((c, i) => `${c}=$${i + 1}`).join(',');
-  const values = cols.map((c) => body[c]);
   try {
+    if (!body.force && (body.name !== undefined || body.phone !== undefined || body.email !== undefined)) {
+      const current = await db.get('SELECT name, phone, email FROM participants WHERE id=$1', [req.params.id]);
+      const candidate = {
+        name: body.name !== undefined ? body.name : current && current.name,
+        phone: body.phone !== undefined ? body.phone : current && current.phone,
+        email: body.email !== undefined ? body.email : current && current.email
+      };
+      const dup = await findDuplicate(db, { ...candidate, excludeId: req.params.id });
+      if (dup) {
+        return res.status(409).json({
+          error: 'duplicate',
+          message: `A participant named "${dup.name}" with a matching phone/email already exists (Registration ID ${dup.participant_code || '—'}, Reg# ${dup.reg_number || '—'}). Save anyway?`,
+          existing: dup
+        });
+      }
+    }
+    const cols = FIELDS.filter((f) => body[f] !== undefined);
+    if (cols.length === 0) return res.json({ ok: true });
+    const setClause = cols.map((c, i) => `${c}=$${i + 1}`).join(',');
+    const values = cols.map((c) => body[c]);
     await db.run(`UPDATE participants SET ${setClause} WHERE id=$${cols.length + 1}`, [...values, req.params.id]);
     res.json({ ok: true });
   } catch (e) {
@@ -97,8 +174,17 @@ router.post('/bulk-upload', upload.single('file'), async (req, res) => {
   try {
     const records = parse(req.file.buffer.toString('utf8'), { columns: true, skip_empty_lines: true, trim: true });
     let imported = 0;
+    const skipped = [];
     await db.transaction(async (tx) => {
       for (const r of records) {
+        const forceRow = ['1', 'true', 'yes'].includes(String(r.force || '').toLowerCase());
+        if (!forceRow) {
+          const dup = await findDuplicate(tx, { name: r.name, phone: r.phone, email: r.email });
+          if (dup) {
+            skipped.push({ name: r.name, reason: `Matches existing ${dup.participant_code || 'participant'} (${dup.name})` });
+            continue;
+          }
+        }
         const club = r.club_name ? await tx.get('SELECT id FROM clubs WHERE name = $1', [r.club_name]) : null;
         const reg = r.reg_number ? await tx.get('SELECT id FROM registrations WHERE reg_number = $1', [r.reg_number]) : null;
         await tx.run(`
@@ -136,7 +222,7 @@ router.post('/bulk-upload', upload.single('file'), async (req, res) => {
         imported++;
       }
     });
-    res.json({ ok: true, imported });
+    res.json({ ok: true, imported, skipped: skipped.length, duplicates: skipped });
   } catch (e) {
     res.status(400).json({ error: 'Failed to parse/import CSV: ' + e.message });
   }
