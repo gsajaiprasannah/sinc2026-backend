@@ -250,6 +250,12 @@ async function initSchema() {
   await pool.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;`);
   await pool.query(`ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('super_admin','admin','host_member'));`);
 
+  // Older databases created before 'congress_only' was added to reg_type need
+  // the CHECK constraint relaxed (Postgres won't alter CHECK constraints in
+  // place — drop and recreate, same pattern as users_role_check above).
+  await pool.query(`ALTER TABLE registrations DROP CONSTRAINT IF EXISTS registrations_reg_type_check;`);
+  await pool.query(`ALTER TABLE registrations ADD CONSTRAINT registrations_reg_type_check CHECK (reg_type IN ('single','double','congress_only'));`);
+
   // Safe to run repeatedly — adds the column only if an older schema is missing it.
   await pool.query(`ALTER TABLE participants ADD COLUMN IF NOT EXISTS dietary_preference TEXT;`);
 

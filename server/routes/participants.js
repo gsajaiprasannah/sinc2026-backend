@@ -64,23 +64,35 @@ async function findDuplicate(runner, { name, phone, email, excludeId }) {
   return runner.get(sql, params);
 }
 
+// Every participant SELECT joins in the linked "SPOC" delegate_assignment
+// (if one exists) so the admin table can show a real host member as SPOC
+// instead of the old free-text spoc_name/spoc_phone fields. Legacy free text
+// is kept as a fallback for rows that predate this feature.
+const SPOC_JOIN = `
+  LEFT JOIN delegate_assignments spoc_da ON spoc_da.participant_id = p.id AND spoc_da.role = 'SPOC'
+  LEFT JOIN host_members spoc_hm ON spoc_hm.id = spoc_da.host_member_id
+`;
+const SPOC_SELECT = `spoc_hm.id AS spoc_host_member_id, spoc_hm.name AS spoc_host_member_name, spoc_hm.phone AS spoc_host_member_phone`;
+
 router.get('/', async (req, res) => {
   try {
     const search = req.query.q ? `%${req.query.q}%` : null;
     const rows = search
       ? await db.all(`
-          SELECT p.*, r.reg_number, r.reg_type, r.payment_status, c.name AS club_name
+          SELECT p.*, r.reg_number, r.reg_type, r.payment_status, c.name AS club_name, ${SPOC_SELECT}
           FROM participants p
           LEFT JOIN registrations r ON r.id = p.registration_id
           LEFT JOIN clubs c ON c.id = p.club_id
+          ${SPOC_JOIN}
           WHERE p.name ILIKE $1 OR p.phone ILIKE $1 OR r.reg_number ILIKE $1 OR c.name ILIKE $1
           ORDER BY p.created_at DESC
         `, [search])
       : await db.all(`
-          SELECT p.*, r.reg_number, r.reg_type, r.payment_status, c.name AS club_name
+          SELECT p.*, r.reg_number, r.reg_type, r.payment_status, c.name AS club_name, ${SPOC_SELECT}
           FROM participants p
           LEFT JOIN registrations r ON r.id = p.registration_id
           LEFT JOIN clubs c ON c.id = p.club_id
+          ${SPOC_JOIN}
           ORDER BY p.created_at DESC
         `);
     res.json(rows);
@@ -92,10 +104,11 @@ router.get('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const row = await db.get(`
-      SELECT p.*, r.reg_number, r.reg_type, r.payment_status, c.name AS club_name
+      SELECT p.*, r.reg_number, r.reg_type, r.payment_status, c.name AS club_name, ${SPOC_SELECT}
       FROM participants p
       LEFT JOIN registrations r ON r.id = p.registration_id
       LEFT JOIN clubs c ON c.id = p.club_id
+      ${SPOC_JOIN}
       WHERE p.id = $1
     `, [req.params.id]);
     if (!row) return res.status(404).json({ error: 'not found' });

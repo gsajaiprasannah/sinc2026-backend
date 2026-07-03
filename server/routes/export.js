@@ -23,11 +23,12 @@ router.get('/voice-agent', async (req, res) => {
     const totalRegs = registrations.length;
     const single = registrations.filter((r) => r.reg_type === 'single').length;
     const double = registrations.filter((r) => r.reg_type === 'double').length;
+    const congressOnly = registrations.filter((r) => r.reg_type === 'congress_only').length;
     const totalCollected = registrations.reduce((s, r) => s + Number(r.amount_paid || 0), 0);
 
     const qa = [];
     qa.push({ question: 'How many Skål clubs are there across India in SINC2026?', answer: `There are ${clubs.length} clubs registered, with a combined membership of ${totalMembers} across India.` });
-    qa.push({ question: 'How many people have registered for SINC2026?', answer: `${totalRegs} registrations have been made: ${single} single registrations and ${double} double registrations.` });
+    qa.push({ question: 'How many people have registered for SINC2026?', answer: `${totalRegs} registrations have been made: ${single} single registrations, ${double} double registrations, and ${congressOnly} Congress Only (domestic, no room) registrations.` });
     qa.push({ question: 'How much money has been collected so far for SINC2026?', answer: `A total of ₹${totalCollected.toLocaleString('en-IN')} has been collected so far across all registrations.` });
 
     for (const c of clubs) {

@@ -45,6 +45,30 @@ router.post('/', async (req, res) => {
   }
 });
 
+// Convenience endpoint for the Participants tab: sets (or clears, if
+// host_member_id is omitted) the single "SPOC" delegate_assignment for a
+// participant in one call, instead of managing it through the general
+// assignment CRUD above. Keeps at most one SPOC assignment per delegate.
+router.put('/spoc/:participantId', async (req, res) => {
+  const { host_member_id } = req.body;
+  const participantId = req.params.participantId;
+  try {
+    await db.transaction(async (tx) => {
+      await tx.run(`DELETE FROM delegate_assignments WHERE participant_id=$1 AND role='SPOC'`, [participantId]);
+      if (host_member_id) {
+        await tx.run(`
+          INSERT INTO delegate_assignments (host_member_id, participant_id, role, status)
+          VALUES ($1,$2,'SPOC','not_started')
+          ON CONFLICT (host_member_id, participant_id) DO UPDATE SET role='SPOC'
+        `, [host_member_id, participantId]);
+      }
+    });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
 router.put('/:id', async (req, res) => {
   const { role, status, notes } = req.body;
   try {

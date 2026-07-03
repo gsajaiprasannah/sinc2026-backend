@@ -10,6 +10,7 @@ router.get('/overview', async (req, res) => {
     const totalRegistrations = (await db.get('SELECT COUNT(*) AS n FROM registrations')).n;
     const singleRegs = (await db.get("SELECT COUNT(*) AS n FROM registrations WHERE reg_type='single'")).n;
     const doubleRegs = (await db.get("SELECT COUNT(*) AS n FROM registrations WHERE reg_type='double'")).n;
+    const congressOnlyRegs = (await db.get("SELECT COUNT(*) AS n FROM registrations WHERE reg_type='congress_only'")).n;
     const totalParticipants = (await db.get('SELECT COUNT(*) AS n FROM participants')).n;
     const totalCollected = (await db.get('SELECT COALESCE(SUM(amount_paid),0) AS n FROM registrations')).n;
     const totalDue = (await db.get('SELECT COALESCE(SUM(amount_due),0) AS n FROM registrations')).n;
@@ -23,6 +24,7 @@ router.get('/overview', async (req, res) => {
       totalRegistrations: Number(totalRegistrations),
       singleRegs: Number(singleRegs),
       doubleRegs: Number(doubleRegs),
+      congressOnlyRegs: Number(congressOnlyRegs),
       totalParticipants: Number(totalParticipants),
       totalCollected: Number(totalCollected),
       totalDue: Number(totalDue),
