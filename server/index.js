@@ -3,7 +3,7 @@ const cors = require('cors');
 const path = require('path');
 const db = require('./db');
 const { runBackup } = require('./backup');
-const { hashPassword, requireAuth } = require('./auth');
+const { hashPassword, requireAuth, requireSuperAdmin } = require('./auth');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -31,6 +31,16 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 
 // --- Auth routes (signup/login are public; user-management is self-gated inside) ---
 app.use('/api/auth', require('./routes/auth'));
+
+// --- Only a super admin may delete anything, across every resource (clubs, ---
+// --- registrations, participants, media, happenings, logins). A regular   ---
+// --- admin can still create/edit records, just not permanently remove     ---
+// --- them. Checked once here, globally, so no individual route can be     ---
+// --- accidentally left unprotected.                                      ---
+app.use('/api', (req, res, next) => {
+  if (req.method === 'DELETE') return requireSuperAdmin(req, res, next);
+  next();
+});
 
 // --- Fully protected — personal data (names/phones/emails/addresses) and ---
 // --- payment data never leave the server without a valid login.          ---
