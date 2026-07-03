@@ -23,8 +23,8 @@ const R2_ENABLED = !!(
 let s3Client = null;
 let S3Cmds = null;
 if (R2_ENABLED) {
-  const { S3Client, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand } = require('@aws-sdk/client-s3');
-  S3Cmds = { PutObjectCommand, DeleteObjectCommand, HeadObjectCommand };
+  const { S3Client, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
+  S3Cmds = { PutObjectCommand, DeleteObjectCommand, HeadObjectCommand, GetObjectCommand };
   s3Client = new S3Client({
     region: 'auto',
     endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
@@ -112,6 +112,44 @@ router.get('/', async (req, res) => {
     res.json(rows);
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// Forces a real download (correct filename, Content-Disposition: attachment)
+// instead of the browser trying to play/preview the file inline. We stream it
+// through our own server rather than linking straight to the R2/public URL —
+// that way this works regardless of the bucket's CORS configuration, and the
+// downloaded file always gets a friendly name instead of a timestamped key.
+router.get('/:id/download', async (req, res) => {
+  try {
+    const row = await db.get('SELECT * FROM media WHERE id=$1', [req.params.id]);
+    if (!row) return res.status(404).json({ error: 'Not found' });
+
+    const extMatch = row.filename.match(/\.([a-zA-Z0-9]+)(?:$|\?)/);
+    const ext = extMatch ? extMatch[1] : '';
+    let baseName = (row.original_name || row.title || `media-${row.id}`).replace(/[^a-zA-Z0-9.\-_ ]/g, '_').trim();
+    if (ext && !baseName.toLowerCase().endsWith('.' + ext.toLowerCase())) baseName += '.' + ext;
+    const downloadName = baseName || `media-${row.id}`;
+
+    if (R2_ENABLED && /^https?:\/\//.test(row.filename)) {
+      const key = row.filename.replace(process.env.R2_PUBLIC_URL_BASE.replace(/\/$/, '') + '/', '');
+      const obj = await s3Client.send(new S3Cmds.GetObjectCommand({ Bucket: process.env.R2_BUCKET, Key: key }));
+      res.setHeader('Content-Disposition', `attachment; filename="${downloadName.replace(/"/g, '')}"`);
+      res.setHeader('Content-Type', obj.ContentType || 'application/octet-stream');
+      if (obj.ContentLength) res.setHeader('Content-Length', obj.ContentLength);
+      obj.Body.pipe(res);
+      return;
+    }
+
+    if (row.filename && row.filename.startsWith('/uploads/')) {
+      const filePath = path.join(__dirname, '..', '..', 'public', row.filename);
+      return res.download(filePath, downloadName);
+    }
+
+    res.status(404).json({ error: 'File location unknown' });
+  } catch (e) {
+    console.error('Media download failed —', e.message);
+    res.status(500).json({ error: 'Download failed: ' + e.message });
   }
 });
 
