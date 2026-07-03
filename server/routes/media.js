@@ -23,8 +23,8 @@ const R2_ENABLED = !!(
 let s3Client = null;
 let S3Cmds = null;
 if (R2_ENABLED) {
-  const { S3Client, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
-  S3Cmds = { PutObjectCommand, DeleteObjectCommand };
+  const { S3Client, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand } = require('@aws-sdk/client-s3');
+  S3Cmds = { PutObjectCommand, DeleteObjectCommand, HeadObjectCommand };
   s3Client = new S3Client({
     region: 'auto',
     endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
@@ -45,7 +45,19 @@ function safeName(original) {
 // Saves the uploaded file and returns the path/URL to store in the DB.
 // R2 path returns an absolute https:// URL; local disk returns a relative
 // /uploads/... path — the frontend's mediaUrl() helper already handles both.
+//
+// IMPORTANT: after the R2 write we re-read the object's metadata (HeadObject)
+// and confirm its size matches what we tried to upload. This catches the
+// class of bug where a flaky connection truncates the upload partway —
+// without this check, a broken/incomplete file could get written to R2 (or
+// simply never make it) while still looking "successful" to the caller,
+// leaving a database row that points at a corrupt or missing file. Better to
+// fail loudly here than silently create a broken media entry.
 async function saveFile(file, sub) {
+  if (!file.buffer || file.buffer.length === 0) {
+    throw new Error('The uploaded file came through empty (0 bytes) — likely an interrupted upload. Please try again.');
+  }
+
   const ts = Date.now();
   const key = `${sub}/${ts}-${safeName(file.originalname)}`;
 
@@ -56,6 +68,16 @@ async function saveFile(file, sub) {
       Body: file.buffer,
       ContentType: file.mimetype
     }));
+
+    // Verify the object actually landed intact before we tell the caller (and
+    // the database) that this upload succeeded.
+    const head = await s3Client.send(new S3Cmds.HeadObjectCommand({ Bucket: process.env.R2_BUCKET, Key: key }));
+    if (Number(head.ContentLength) !== file.buffer.length) {
+      // Clean up the bad object so it doesn't linger as orphaned storage.
+      await s3Client.send(new S3Cmds.DeleteObjectCommand({ Bucket: process.env.R2_BUCKET, Key: key })).catch(() => {});
+      throw new Error(`Upload verification failed — expected ${file.buffer.length} bytes but R2 stored ${head.ContentLength}. Please try again (this usually means the network connection dropped mid-upload).`);
+    }
+
     return `${process.env.R2_PUBLIC_URL_BASE.replace(/\/$/, '')}/${key}`;
   }
 
@@ -93,7 +115,24 @@ router.get('/', async (req, res) => {
   }
 });
 
-router.post('/upload', upload.single('file'), async (req, res) => {
+router.post('/upload', (req, res, next) => {
+  // Run multer manually (instead of as route middleware) so we can catch its
+  // errors — e.g. LIMIT_FILE_SIZE, or a multipart stream that ends early
+  // because the client's connection dropped mid-upload — and return a clean
+  // JSON error instead of letting Express fall through to its default HTML
+  // error page (which the admin panel's fetch() can't parse, and previously
+  // just showed as a cryptic failure with no real explanation).
+  upload.single('file')(req, res, (err) => {
+    if (err) {
+      console.error('Media upload: multer/stream error —', err.message);
+      const friendly = err.code === 'LIMIT_FILE_SIZE'
+        ? 'File is too large (max 500MB).'
+        : 'Upload was interrupted before it finished (likely a dropped connection). Please try again.';
+      return res.status(400).json({ error: friendly });
+    }
+    next();
+  });
+}, async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'file is required' });
   try {
     const type = req.body.type === 'poster' ? 'poster' : 'video';
@@ -105,6 +144,7 @@ router.post('/upload', upload.single('file'), async (req, res) => {
     );
     res.json({ id: result.id, path: storedPath });
   } catch (e) {
+    console.error('Media upload failed —', e.message);
     res.status(500).json({ error: 'Upload failed: ' + e.message });
   }
 });
