@@ -3,6 +3,29 @@ const db = require('../db');
 
 const router = express.Router();
 
+function normPhone(p) {
+  return (p || '').replace(/\D/g, '').slice(-10);
+}
+
+async function findDuplicateDriver({ phone, vehicle_number, excludeId }) {
+  const np = normPhone(phone);
+  const nv = (vehicle_number || '').trim().toUpperCase();
+  if (np) {
+    let sql = `SELECT id, name, vehicle_number FROM drivers WHERE phone <> '' AND RIGHT(regexp_replace(phone, '[^0-9]', '', 'g'), 10) = $1`;
+    const params = [np];
+    if (excludeId) { sql += ' AND id <> $2'; params.push(excludeId); }
+    const row = await db.get(sql, params);
+    if (row) return row;
+  }
+  if (nv) {
+    let sql = `SELECT id, name, vehicle_number FROM drivers WHERE upper(trim(vehicle_number)) = $1`;
+    const params = [nv];
+    if (excludeId) { sql += ' AND id <> $2'; params.push(excludeId); }
+    return db.get(sql, params);
+  }
+  return null;
+}
+
 router.get('/', async (req, res) => {
   try {
     const rows = await db.all(`
@@ -17,9 +40,13 @@ router.get('/', async (req, res) => {
 });
 
 router.post('/', async (req, res) => {
-  const { name, phone, vehicle_number, vehicle_type, partner_id, notes } = req.body;
+  const { name, phone, vehicle_number, vehicle_type, partner_id, notes, force } = req.body;
   if (!name) return res.status(400).json({ error: 'name is required' });
   try {
+    if (!force) {
+      const dup = await findDuplicateDriver({ phone, vehicle_number });
+      if (dup) return res.status(409).json({ error: `A driver named "${dup.name}"${dup.vehicle_number ? ' (vehicle ' + dup.vehicle_number + ')' : ''} already exists with a matching phone/vehicle number.`, existing: dup });
+    }
     const result = await db.run(`
       INSERT INTO drivers (name, phone, vehicle_number, vehicle_type, partner_id, notes)
       VALUES ($1,$2,$3,$4,$5,$6) RETURNING id

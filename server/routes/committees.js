@@ -26,6 +26,8 @@ router.post('/', async (req, res) => {
   const { name, sort_order } = req.body;
   if (!name) return res.status(400).json({ error: 'name is required' });
   try {
+    const dup = await db.get('SELECT id FROM committees WHERE lower(trim(name)) = lower(trim($1))', [name]);
+    if (dup) return res.status(409).json({ error: `A committee named "${name}" already exists.` });
     const result = await db.run(
       'INSERT INTO committees (name, sort_order) VALUES ($1,$2) RETURNING id',
       [name, Number(sort_order) || 0]
@@ -39,6 +41,10 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   const { name, sort_order } = req.body;
   try {
+    if (name !== undefined) {
+      const dup = await db.get('SELECT id FROM committees WHERE lower(trim(name)) = lower(trim($1)) AND id <> $2', [name, req.params.id]);
+      if (dup) return res.status(409).json({ error: `A committee named "${name}" already exists.` });
+    }
     await db.run(
       'UPDATE committees SET name=COALESCE($1,name), sort_order=COALESCE($2,sort_order) WHERE id=$3',
       [name || null, sort_order !== undefined ? Number(sort_order) : null, req.params.id]
