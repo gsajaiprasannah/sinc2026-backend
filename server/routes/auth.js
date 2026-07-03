@@ -5,7 +5,7 @@ const { hashPassword, verifyPassword, signToken, requireAuth, requireSuperAdmin 
 const router = express.Router();
 
 function publicUser(u) {
-  return { id: u.id, username: u.username, email: u.email, role: u.role, status: u.status, created_at: u.created_at, approved_at: u.approved_at };
+  return { id: u.id, username: u.username, email: u.email, role: u.role, status: u.status, created_at: u.created_at, approved_at: u.approved_at, host_member_id: u.host_member_id };
 }
 
 // --- Self-service signup: creates a PENDING account. Cannot log in until a ---
@@ -67,23 +67,34 @@ router.put('/me/password', requireAuth, async (req, res) => {
 
 // --- Settings panel: user management — super_admin only ---
 router.get('/users', requireSuperAdmin, async (req, res) => {
-  const rows = await db.all(`SELECT * FROM users ORDER BY (status='pending') DESC, created_at DESC`);
-  res.json(rows.map(publicUser));
+  const rows = await db.all(`
+    SELECT u.*, hm.name AS host_member_name
+    FROM users u LEFT JOIN host_members hm ON hm.id = u.host_member_id
+    ORDER BY (u.status='pending') DESC, u.created_at DESC
+  `);
+  res.json(rows.map((u) => ({ ...publicUser(u), host_member_name: u.host_member_name })));
 });
 
 // "Generate a login" — directly create an already-approved account.
+// role can be 'admin', 'super_admin', or 'host_member' — a host_member login
+// must also supply host_member_id so it's linked to that person's profile
+// (their assigned delegates, tasks, committees, payment status).
 router.post('/users', requireSuperAdmin, async (req, res) => {
-  const { username, email, password, role } = req.body;
+  const { username, email, password, role, host_member_id } = req.body;
   if (!username || !password) return res.status(400).json({ error: 'Username and password are required.' });
   if (String(password).length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters.' });
+  const finalRole = ['super_admin', 'host_member'].includes(role) ? role : 'admin';
+  if (finalRole === 'host_member' && !host_member_id) {
+    return res.status(400).json({ error: 'Choose which host member this login belongs to.' });
+  }
   try {
     const existing = await db.get('SELECT id FROM users WHERE lower(username)=lower($1)', [username.trim()]);
     if (existing) return res.status(409).json({ error: 'That username already exists.' });
     const hash = await hashPassword(password);
     const result = await db.run(
-      `INSERT INTO users (username, email, password_hash, role, status, approved_at, approved_by)
-       VALUES ($1,$2,$3,$4,'approved',NOW(),$5) RETURNING id`,
-      [username.trim(), (email || '').trim(), hash, role === 'super_admin' ? 'super_admin' : 'admin', req.user.id]
+      `INSERT INTO users (username, email, password_hash, role, status, approved_at, approved_by, host_member_id)
+       VALUES ($1,$2,$3,$4,'approved',NOW(),$5,$6) RETURNING id`,
+      [username.trim(), (email || '').trim(), hash, finalRole, req.user.id, finalRole === 'host_member' ? host_member_id : null]
     );
     res.json({ id: result.id });
   } catch (e) {
@@ -102,11 +113,11 @@ router.put('/users/:id/reject', requireSuperAdmin, async (req, res) => {
 });
 
 router.put('/users/:id', requireSuperAdmin, async (req, res) => {
-  const { role, status } = req.body;
+  const { role, status, host_member_id } = req.body;
   try {
     await db.run(
-      `UPDATE users SET role=COALESCE($1,role), status=COALESCE($2,status) WHERE id=$3`,
-      [role || null, status || null, req.params.id]
+      `UPDATE users SET role=COALESCE($1,role), status=COALESCE($2,status), host_member_id=COALESCE($3,host_member_id) WHERE id=$4`,
+      [role || null, status || null, host_member_id || null, req.params.id]
     );
     res.json({ ok: true });
   } catch (e) {

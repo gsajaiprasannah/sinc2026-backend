@@ -48,6 +48,18 @@ app.use('/api/participants', requireAuth, require('./routes/participants'));
 app.use('/api/registrations', requireAuth, require('./routes/registrations'));
 app.use('/api/export', requireAuth, require('./routes/export'));
 
+// --- Host club module — host member directory, committees, delegate ---
+// --- assistance assignments, and their checklist/milestones. All internal ---
+// --- staff data, so fully protected like participants/registrations.     ---
+app.use('/api/hostmembers', requireAuth, require('./routes/hostmembers'));
+app.use('/api/committees', requireAuth, require('./routes/committees'));
+app.use('/api/assignments', requireAuth, require('./routes/assignments'));
+app.use('/api/tasks', requireAuth, require('./routes/tasks'));
+app.use('/api/partners', requireAuth, require('./routes/partners'));
+app.use('/api/drivers', requireAuth, require('./routes/drivers'));
+// Self-service host-member portal — does its own auth + ownership checks.
+app.use('/api/host', require('./routes/host'));
+
 // --- Public reads (needed by the public dashboard), protected writes ---
 app.use('/api', (req, res, next) => {
   if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(req.method)) {
@@ -57,6 +69,7 @@ app.use('/api', (req, res, next) => {
 });
 app.use('/api/clubs', require('./routes/clubs'));
 app.use('/api/media', require('./routes/media'));
+app.use('/api/itinerary', require('./routes/itinerary'));
 app.use('/api/happenings', require('./routes/happenings'));
 app.use('/api/stats', require('./routes/stats'));
 

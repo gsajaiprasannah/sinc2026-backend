@@ -135,13 +135,120 @@ async function initSchema() {
       username TEXT NOT NULL UNIQUE,
       email TEXT,
       password_hash TEXT NOT NULL,
-      role TEXT NOT NULL DEFAULT 'admin' CHECK (role IN ('super_admin','admin')),
+      role TEXT NOT NULL DEFAULT 'admin' CHECK (role IN ('super_admin','admin','host_member')),
       status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected','disabled')),
       created_at TIMESTAMP DEFAULT NOW(),
       approved_at TIMESTAMP,
       approved_by INTEGER REFERENCES users(id)
     );
+
+    -- --- Host club module (Skål Coimbatore members organizing/hosting the congress) ---
+    -- These are distinct from 'participants' (the delegates attending). Host members
+    -- volunteer to assist delegates, sit on committees, and pay their own ₹5000
+    -- host-club contribution, tracked separately from delegate registration payments.
+    CREATE TABLE IF NOT EXISTS host_members (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      email TEXT,
+      phone TEXT,
+      company TEXT,
+      designation TEXT,
+      category TEXT,
+      payment_status TEXT NOT NULL DEFAULT 'pending' CHECK (payment_status IN ('paid','pending')),
+      payment_amount NUMERIC NOT NULL DEFAULT 5000,
+      payment_date DATE,
+      payment_mode TEXT,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS committees (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      sort_order INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS committee_members (
+      id SERIAL PRIMARY KEY,
+      committee_id INTEGER NOT NULL REFERENCES committees(id) ON DELETE CASCADE,
+      host_member_id INTEGER NOT NULL REFERENCES host_members(id) ON DELETE CASCADE,
+      UNIQUE(committee_id, host_member_id)
+    );
+
+    -- Who is responsible for assisting which delegate — the "who's responsible
+    -- for whom" tracking the congress team asked for, with a status so progress
+    -- on that assistance can be followed over time.
+    CREATE TABLE IF NOT EXISTS delegate_assignments (
+      id SERIAL PRIMARY KEY,
+      host_member_id INTEGER NOT NULL REFERENCES host_members(id) ON DELETE CASCADE,
+      participant_id INTEGER NOT NULL REFERENCES participants(id) ON DELETE CASCADE,
+      role TEXT NOT NULL DEFAULT 'assistance',
+      status TEXT NOT NULL DEFAULT 'not_started' CHECK (status IN ('not_started','in_progress','completed')),
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE(host_member_id, participant_id)
+    );
+
+    -- Checklist / milestone items for each host member — their individual
+    -- roles-and-responsibilities tracker. is_milestone just flags the bigger
+    -- checkpoints so they can be visually distinguished from routine to-dos.
+    CREATE TABLE IF NOT EXISTS host_tasks (
+      id SERIAL PRIMARY KEY,
+      host_member_id INTEGER NOT NULL REFERENCES host_members(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      description TEXT,
+      is_milestone INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','in_progress','done')),
+      due_date DATE,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
+
+    -- Masters: partner organizations (transport providers, caterers, hotels, etc.)
+    CREATE TABLE IF NOT EXISTS partners (
+      id SERIAL PRIMARY KEY,
+      category TEXT NOT NULL DEFAULT 'other',
+      name TEXT NOT NULL,
+      contact_person TEXT,
+      phone TEXT,
+      email TEXT,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+
+    -- Masters: individual drivers, optionally linked to a transport partner
+    CREATE TABLE IF NOT EXISTS drivers (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      phone TEXT,
+      vehicle_number TEXT,
+      vehicle_type TEXT,
+      partner_id INTEGER REFERENCES partners(id) ON DELETE SET NULL,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+
+    -- Congress agenda/itinerary, editable from the admin panel instead of
+    -- being hardcoded on the public site.
+    CREATE TABLE IF NOT EXISTS itinerary_items (
+      id SERIAL PRIMARY KEY,
+      day_label TEXT NOT NULL,
+      time_label TEXT,
+      title TEXT NOT NULL,
+      description TEXT,
+      sort_order INTEGER NOT NULL DEFAULT 0
+    );
   `);
+
+  // Safe to run repeatedly — links a 'users' login to a host_members profile
+  // once a host member is given their own account.
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS host_member_id INTEGER REFERENCES host_members(id);`);
+  // Older databases created before 'host_member' was added to the CHECK
+  // constraint need it relaxed, since Postgres won't alter CHECK constraints
+  // in place — drop and recreate.
+  await pool.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;`);
+  await pool.query(`ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('super_admin','admin','host_member'));`);
 
   // Safe to run repeatedly — adds the column only if an older schema is missing it.
   await pool.query(`ALTER TABLE participants ADD COLUMN IF NOT EXISTS dietary_preference TEXT;`);
