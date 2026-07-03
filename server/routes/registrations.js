@@ -6,6 +6,19 @@ const db = require('../db');
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
 
+const REG_PREFIX = 'SINC-';
+function formatRegNumber(n) {
+  return REG_PREFIX + String(n).padStart(4, '0');
+}
+// Finds the highest existing "SINC-####" number and returns the next one.
+async function computeNextRegNumber(runner) {
+  const row = await runner.get(`
+    SELECT COALESCE(MAX((regexp_match(reg_number, '(\\d+)$'))[1]::int), 0) AS max_num
+    FROM registrations WHERE reg_number LIKE $1
+  `, [REG_PREFIX + '%']);
+  return formatRegNumber((row && row.max_num ? row.max_num : 0) + 1);
+}
+
 router.get('/', async (req, res) => {
   try {
     const rows = await db.all(`
@@ -20,17 +33,38 @@ router.get('/', async (req, res) => {
   }
 });
 
-router.post('/', async (req, res) => {
-  const { reg_number, reg_type, club_id, amount_paid, amount_due, payment_mode, payment_status, payment_ref } = req.body;
-  if (!reg_number || !reg_type) return res.status(400).json({ error: 'reg_number and reg_type are required' });
+// Returns the next auto-generated registration number (e.g. SINC-0042) without reserving it.
+router.get('/next-number', async (req, res) => {
   try {
-    const result = await db.run(`
-      INSERT INTO registrations (reg_number, reg_type, club_id, amount_paid, amount_due, payment_mode, payment_status, payment_ref)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id
-    `, [reg_number, reg_type, club_id || null, Number(amount_paid) || 0, Number(amount_due) || 0,
-        payment_mode || '', payment_status || 'pending', payment_ref || '']);
-    res.json({ id: result.id });
+    const reg_number = await computeNextRegNumber(db);
+    res.json({ reg_number });
   } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post('/', async (req, res) => {
+  let { reg_number, reg_type, club_id, amount_paid, amount_due, payment_mode, payment_status, payment_ref } = req.body;
+  if (!reg_type) return res.status(400).json({ error: 'reg_type is required' });
+  try {
+    const result = await db.transaction(async (tx) => {
+      // Advisory lock serializes number assignment so two concurrent submits can't grab the same number.
+      await tx.run('SELECT pg_advisory_xact_lock(778899)');
+      if (!reg_number || !reg_number.trim()) {
+        reg_number = await computeNextRegNumber(tx);
+      }
+      const r = await tx.run(`
+        INSERT INTO registrations (reg_number, reg_type, club_id, amount_paid, amount_due, payment_mode, payment_status, payment_ref)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id
+      `, [reg_number, reg_type, club_id || null, Number(amount_paid) || 0, Number(amount_due) || 0,
+          payment_mode || '', payment_status || 'pending', payment_ref || '']);
+      return r;
+    });
+    res.json({ id: result.id, reg_number });
+  } catch (e) {
+    if (e.code === '23505') {
+      return res.status(409).json({ error: 'duplicate', message: `Registration number "${reg_number}" already exists. Please try again.` });
+    }
     res.status(400).json({ error: e.message });
   }
 });
