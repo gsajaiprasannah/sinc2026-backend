@@ -1,0 +1,3 @@
+reg_number,reg_type,club_name,amount_paid,amount_due,payment_mode,payment_status,payment_ref
+SINC-0003,single,Skål Chennai,8000,0,UPI,paid,UPI778812
+SINC-0004,double,Skål Delhi,24000,0,Card,paid,CARD9981

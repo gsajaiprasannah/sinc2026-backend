@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<title>SINC2026 — Skål International Admin</title>
+<link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">
+      <img src="img/skal-logo.png" alt="Skål International" class="logo-mark" />
+      <div>
+        <h1>Congress Admin</h1>
+        <span>Data &amp; media management</span>
+      </div>
+    </div>
+    <nav><a href="index.html">← Dashboard</a></nav>
+  </div>
+</header>
+
+<nav class="admin-nav" id="tabNav">
+  <button data-tab="clubs" class="active">Clubs &amp; Members</button>
+  <button data-tab="registrations">Registrations &amp; Payments</button>
+  <button data-tab="participants">Participants</button>
+  <button data-tab="media">Media (Video/Poster)</button>
+  <button data-tab="happenings">Happenings</button>
+  <button data-tab="export">Voice Agent Export</button>
+</nav>
+
+<main class="container">
+
+  <!-- CLUBS TAB -->
+  <section class="tab-panel active" id="tab-clubs">
+    <div class="two-col">
+      <div class="card">
+        <div class="section-title" style="margin-top:0">Add / update a club</div>
+        <form id="clubForm">
+          <div class="form-grid cols-2">
+            <div class="field"><label>Club name *</label><input name="name" required placeholder="Skål Chennai" /></div>
+            <div class="field"><label>City</label><input name="city" /></div>
+            <div class="field"><label>State</label><input name="state" /></div>
+            <div class="field"><label>Zone / Region</label><input name="zone" placeholder="South / North / East / West" /></div>
+            <div class="field"><label>Members count *</label><input name="members_count" type="number" min="0" required /></div>
+          </div>
+          <button class="btn gold" type="submit">Save Club</button>
+        </form>
+      </div>
+      <div class="card">
+        <div class="section-title" style="margin-top:0">Bulk upload (CSV)</div>
+        <p class="hint">Columns: <code>name, city, state, zone, members_count</code>. Existing club names are updated.</p>
+        <form id="clubCsvForm">
+          <input type="file" name="file" accept=".csv" required />
+          <button class="btn" type="submit" style="margin-top:10px;">Upload CSV</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="section-title">All clubs</div>
+    <div class="card table-scroll">
+      <table>
+        <thead><tr><th>Name</th><th>City</th><th>State</th><th>Zone</th><th>Members</th><th></th></tr></thead>
+        <tbody id="clubsTableBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- REGISTRATIONS TAB -->
+  <section class="tab-panel" id="tab-registrations">
+    <div class="two-col">
+      <div class="card">
+        <div class="section-title" style="margin-top:0">Add registration</div>
+        <form id="regForm">
+          <div class="form-grid cols-2">
+            <div class="field"><label>Registration number *</label><input name="reg_number" required placeholder="SINC-0003" /></div>
+            <div class="field"><label>Type *</label>
+              <select name="reg_type" required>
+                <option value="single">Single</option>
+                <option value="double">Double</option>
+              </select>
+            </div>
+            <div class="field"><label>Club</label><select name="club_id" id="regClubSelect"></select></div>
+            <div class="field"><label>Amount paid (₹)</label><input name="amount_paid" type="number" min="0" step="0.01" /></div>
+            <div class="field"><label>Amount due (₹)</label><input name="amount_due" type="number" min="0" step="0.01" /></div>
+            <div class="field"><label>Payment mode</label><input name="payment_mode" placeholder="UPI / Card / NEFT" /></div>
+            <div class="field"><label>Payment status</label>
+              <select name="payment_status">
+                <option value="pending">Pending</option>
+                <option value="partial">Partial</option>
+                <option value="paid">Paid</option>
+                <option value="refunded">Refunded</option>
+              </select>
+            </div>
+            <div class="field"><label>Payment reference</label><input name="payment_ref" /></div>
+          </div>
+          <button class="btn gold" type="submit">Save Registration</button>
+        </form>
+      </div>
+      <div class="card">
+        <div class="section-title" style="margin-top:0">Bulk upload (CSV)</div>
+        <p class="hint">Columns: <code>reg_number, reg_type, club_name, amount_paid, amount_due, payment_mode, payment_status, payment_ref</code></p>
+        <form id="regCsvForm">
+          <input type="file" name="file" accept=".csv" required />
+          <button class="btn" type="submit" style="margin-top:10px;">Upload CSV</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="section-title">All registrations</div>
+    <div class="card table-scroll">
+      <table>
+        <thead><tr><th>Reg #</th><th>Type</th><th>Club</th><th>Paid</th><th>Due</th><th>Status</th><th>People</th><th></th></tr></thead>
+        <tbody id="regsTableBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- PARTICIPANTS TAB -->
+  <section class="tab-panel" id="tab-participants">
+    <div class="card">
+      <div class="section-title" style="margin-top:0">Add participant</div>
+      <form id="partForm">
+        <div class="form-grid cols-3">
+          <div class="field"><label>Full name *</label><input name="name" required /></div>
+          <div class="field"><label>Phone</label><input name="phone" /></div>
+          <div class="field"><label>WhatsApp</label><input name="whatsapp" /></div>
+          <div class="field"><label>Email</label><input name="email" type="email" /></div>
+          <div class="field"><label>Club</label><select name="club_id" id="partClubSelect"></select></div>
+          <div class="field"><label>Registration</label><select name="registration_id" id="partRegSelect"></select></div>
+          <div class="field"><label>Designation</label><input name="designation" placeholder="President / Member / Spouse" /></div>
+          <div class="field"><label>Primary registrant?</label>
+            <select name="is_primary"><option value="1">Yes</option><option value="0">No (co-registrant)</option></select>
+          </div>
+        </div>
+        <div class="field"><label>Address</label><textarea name="address"></textarea></div>
+
+        <div class="section-title" style="font-size:12px;margin:16px 0 8px;">Travel — arrival</div>
+        <div class="form-grid cols-3">
+          <div class="field"><label>Mode</label>
+            <select name="travel_mode"><option value="">-</option><option value="flight">Flight</option><option value="train">Train</option><option value="road">Road</option><option value="other">Other</option></select>
+          </div>
+          <div class="field"><label>Flight / Train number</label><input name="travel_number" /></div>
+          <div class="field"><label>Date &amp; time</label><input name="travel_datetime" type="datetime-local" /></div>
+          <div class="field"><label>Arrival point</label><input name="arrival_point" placeholder="Airport / Station" /></div>
+        </div>
+
+        <div class="section-title" style="font-size:12px;margin:16px 0 8px;">Travel — departure</div>
+        <div class="form-grid cols-3">
+          <div class="field"><label>Mode</label>
+            <select name="departure_mode"><option value="">-</option><option value="flight">Flight</option><option value="train">Train</option><option value="road">Road</option><option value="other">Other</option></select>
+          </div>
+          <div class="field"><label>Flight / Train number</label><input name="departure_number" /></div>
+          <div class="field"><label>Date &amp; time</label><input name="departure_datetime" type="datetime-local" /></div>
+        </div>
+
+        <div class="section-title" style="font-size:12px;margin:16px 0 8px;">Pickup &amp; SPOC</div>
+        <div class="form-grid cols-3">
+          <div class="field"><label>Picked up by</label><input name="pickup_by" /></div>
+          <div class="field"><label>Vehicle</label><input name="pickup_vehicle" placeholder="Innova KA-05-AB-1234" /></div>
+          <div class="field"><label>Pickup contact phone</label><input name="pickup_phone" /></div>
+          <div class="field"><label>SPOC name</label><input name="spoc_name" /></div>
+          <div class="field"><label>SPOC phone</label><input name="spoc_phone" /></div>
+        </div>
+        <div class="field"><label>Notes</label><textarea name="notes"></textarea></div>
+
+        <button class="btn gold" type="submit">Save Participant</button>
+      </form>
+    </div>
+
+    <div class="card" style="margin-top:14px;">
+      <div class="section-title" style="margin-top:0">Bulk upload (CSV)</div>
+      <p class="hint">Columns: <code>name, phone, whatsapp, email, address, club_name, reg_number, is_primary, designation, travel_mode, travel_number, travel_datetime, arrival_point, departure_mode, departure_number, departure_datetime, pickup_by, pickup_vehicle, pickup_phone, spoc_name, spoc_phone, notes</code></p>
+      <form id="partCsvForm">
+        <input type="file" name="file" accept=".csv" required />
+        <button class="btn" type="submit" style="margin-top:10px;">Upload CSV</button>
+      </form>
+    </div>
+
+    <div class="section-title">All participants</div>
+    <div class="field"><input id="partSearch" placeholder="Search by name, phone, reg#, or club..." /></div>
+    <div class="card table-scroll">
+      <table>
+        <thead><tr><th>Name</th><th>Club</th><th>Reg #</th><th>Phone</th><th>Travel In</th><th>Pickup</th><th>SPOC</th><th></th></tr></thead>
+        <tbody id="partsTableBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- MEDIA TAB -->
+  <section class="tab-panel" id="tab-media">
+    <div class="card">
+      <div class="section-title" style="margin-top:0">Upload video or poster</div>
+      <form id="mediaForm">
+        <div class="form-grid cols-2">
+          <div class="field"><label>Type</label>
+            <select name="type"><option value="video">Video (loop reel)</option><option value="poster">Poster / material</option></select>
+          </div>
+          <div class="field"><label>Title / caption</label><input name="title" /></div>
+        </div>
+        <div class="field"><label>File *</label><input name="file" type="file" accept="video/*,image/*" required /></div>
+        <button class="btn gold" type="submit">Upload</button>
+      </form>
+      <p class="hint">Uploads are saved on the server (up to 500MB) and appear on the public dashboard loop automatically. Toggle "active" to include/exclude from the loop without deleting.</p>
+    </div>
+
+    <div class="section-title">Videos</div>
+    <div class="thumb-grid" id="videoThumbs"></div>
+
+    <div class="section-title">Posters</div>
+    <div class="thumb-grid" id="posterThumbs"></div>
+  </section>
+
+  <!-- HAPPENINGS TAB -->
+  <section class="tab-panel" id="tab-happenings">
+    <div class="card">
+      <div class="section-title" style="margin-top:0">Post an update</div>
+      <form id="happeningForm">
+        <div class="form-grid cols-2">
+          <div class="field"><label>Title *</label><input name="title" required /></div>
+          <div class="field"><label>Category</label>
+            <select name="category">
+              <option value="general">General</option>
+              <option value="logistics">Logistics</option>
+              <option value="session">Session</option>
+              <option value="social">Social event</option>
+              <option value="alert">Alert</option>
+            </select>
+          </div>
+        </div>
+        <div class="field"><label>Description</label><textarea name="description"></textarea></div>
+        <div class="field"><label>Posted by</label><input name="posted_by" value="Admin" /></div>
+        <button class="btn gold" type="submit">Post Update</button>
+      </form>
+    </div>
+
+    <div class="section-title">Timeline</div>
+    <div class="card" id="happeningsList"></div>
+  </section>
+
+  <!-- EXPORT TAB -->
+  <section class="tab-panel" id="tab-export">
+    <div class="card">
+      <div class="section-title" style="margin-top:0">Export data for voice agent training</div>
+      <p class="hint">Generates a structured JSON knowledge base (facts + Q&amp;A pairs on membership, registrations, payments, travel, pickups, SPOCs, and happenings) plus the raw tables — ready to feed into your voice agent's retrieval or fine-tuning pipeline.</p>
+      <button class="btn gold" id="exportBtn">Download voice-agent-data.json</button>
+    </div>
+  </section>
+
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script src="js/config.js"></script>
+<script src="js/admin.js"></script>
+</body>
+</html>

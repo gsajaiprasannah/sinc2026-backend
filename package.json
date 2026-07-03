@@ -1,0 +1,22 @@
+{
+  "name": "sinc2026-congress-dashboard",
+  "version": "2.0.0",
+  "description": "SINC2026 Skal Club Congress - live dashboard, admin backend, and participant tracker (PostgreSQL + Cloudflare R2)",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node server/index.js",
+    "seed": "node server/scripts/seed-real-data.js"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.606.0",
+    "cors": "^2.8.5",
+    "csv-parse": "^5.5.6",
+    "express": "^4.19.2",
+    "multer": "^2.0.0",
+    "pg": "^8.12.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

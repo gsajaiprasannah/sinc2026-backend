@@ -1,0 +1,270 @@
+{
+  "overview": {
+    "totalMembers": 1374,
+    "totalClubs": 22,
+    "totalRegistrations": 114,
+    "singleRegs": 52,
+    "doubleRegs": 62,
+    "totalCollected": 2931000,
+    "totalParticipants": 176
+  },
+  "clubComparison": [
+    {
+      "name": "Bangalore",
+      "state": "Karnataka",
+      "members_count": 142,
+      "registrations": 27,
+      "collected": 723000,
+      "participants": 44
+    },
+    {
+      "name": "Chennai",
+      "state": "Tamil Nadu",
+      "members_count": 179,
+      "registrations": 24,
+      "collected": 597000,
+      "participants": 35
+    },
+    {
+      "name": "Pune",
+      "state": "Maharashtra",
+      "members_count": 48,
+      "registrations": 13,
+      "collected": 349000,
+      "participants": 22
+    },
+    {
+      "name": "Bombay",
+      "state": "Maharashtra",
+      "members_count": 76,
+      "registrations": 8,
+      "collected": 193000,
+      "participants": 11
+    },
+    {
+      "name": "Hyderabad",
+      "state": "Telangana",
+      "members_count": 63,
+      "registrations": 7,
+      "collected": 167000,
+      "participants": 11
+    },
+    {
+      "name": "Kashmir",
+      "state": "Jammu & Kashmir",
+      "members_count": 73,
+      "registrations": 6,
+      "collected": 182000,
+      "participants": 10
+    },
+    {
+      "name": "Mumbai South",
+      "state": "Maharashtra",
+      "members_count": 43,
+      "registrations": 6,
+      "collected": 146000,
+      "participants": 9
+    },
+    {
+      "name": "Mysuru",
+      "state": "Karnataka",
+      "members_count": 30,
+      "registrations": 6,
+      "collected": 164000,
+      "participants": 10
+    },
+    {
+      "name": "New Delhi",
+      "state": "Delhi",
+      "members_count": 198,
+      "registrations": 4,
+      "collected": 88000,
+      "participants": 4
+    },
+    {
+      "name": "Kolkata",
+      "state": "West Bengal",
+      "members_count": 126,
+      "registrations": 4,
+      "collected": 96000,
+      "participants": 5
+    },
+    {
+      "name": "Bhubaneswar",
+      "state": "Odisha",
+      "members_count": 22,
+      "registrations": 3,
+      "collected": 82000,
+      "participants": 5
+    },
+    {
+      "name": "Kochi",
+      "state": "Kerala",
+      "members_count": 64,
+      "registrations": 1,
+      "collected": 12000,
+      "participants": 1
+    },
+    {
+      "name": "Surat",
+      "state": "Gujarat",
+      "members_count": 33,
+      "registrations": 1,
+      "collected": 30000,
+      "participants": 2
+    },
+    {
+      "name": "Jaipur",
+      "state": "Rajasthan",
+      "members_count": 24,
+      "registrations": 1,
+      "collected": 12000,
+      "participants": 1
+    },
+    {
+      "name": "Bhopal",
+      "state": "Madhya Pradesh",
+      "members_count": 19,
+      "registrations": 1,
+      "collected": 30000,
+      "participants": 2
+    },
+    {
+      "name": "Colombo",
+      "state": "International",
+      "members_count": 0,
+      "registrations": 1,
+      "collected": 30000,
+      "participants": 2
+    },
+    {
+      "name": "Kuala Lumpur",
+      "state": "International",
+      "members_count": 0,
+      "registrations": 1,
+      "collected": 30000,
+      "participants": 2
+    },
+    {
+      "name": "Goa",
+      "state": "Goa",
+      "members_count": 105,
+      "registrations": 0,
+      "collected": 0,
+      "participants": 0
+    },
+    {
+      "name": "Coimbatore",
+      "state": "Tamil Nadu",
+      "members_count": 73,
+      "registrations": 0,
+      "collected": 0,
+      "participants": 0
+    },
+    {
+      "name": "Lucknow",
+      "state": "Uttar Pradesh",
+      "members_count": 30,
+      "registrations": 0,
+      "collected": 0,
+      "participants": 0
+    },
+    {
+      "name": "Chandigarh",
+      "state": "Chandigarh",
+      "members_count": 14,
+      "registrations": 0,
+      "collected": 0,
+      "participants": 0
+    },
+    {
+      "name": "Trivandrum",
+      "state": "Kerala",
+      "members_count": 12,
+      "registrations": 0,
+      "collected": 0,
+      "participants": 0
+    }
+  ],
+  "nationwide": [
+    {
+      "state": "Tamil Nadu",
+      "members": 252
+    },
+    {
+      "state": "Delhi",
+      "members": 198
+    },
+    {
+      "state": "Karnataka",
+      "members": 172
+    },
+    {
+      "state": "Maharashtra",
+      "members": 167
+    },
+    {
+      "state": "West Bengal",
+      "members": 126
+    },
+    {
+      "state": "Goa",
+      "members": 105
+    },
+    {
+      "state": "Kerala",
+      "members": 76
+    },
+    {
+      "state": "Jammu & Kashmir",
+      "members": 73
+    },
+    {
+      "state": "Telangana",
+      "members": 63
+    },
+    {
+      "state": "Gujarat",
+      "members": 33
+    },
+    {
+      "state": "Uttar Pradesh",
+      "members": 30
+    },
+    {
+      "state": "Rajasthan",
+      "members": 24
+    },
+    {
+      "state": "Odisha",
+      "members": 22
+    },
+    {
+      "state": "Madhya Pradesh",
+      "members": 19
+    },
+    {
+      "state": "Chandigarh",
+      "members": 14
+    },
+    {
+      "state": "International",
+      "members": 0
+    }
+  ],
+  "happenings": [],
+  "dietary": [
+    {
+      "label": "Vegetarian",
+      "count": 47
+    },
+    {
+      "label": "Non-vegetarian",
+      "count": 121
+    },
+    {
+      "label": "No preference",
+      "count": 8
+    }
+  ]
+}

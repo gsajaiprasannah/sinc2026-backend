@@ -1,0 +1,12 @@
+# Netlify config for the SINC2026 static frontend.
+# This folder (public/) is the publish directory when deployed on its own —
+# there's no build step, it's plain HTML/CSS/JS.
+
+[build]
+  publish = "."
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "SAMEORIGIN"
+    X-Content-Type-Options = "nosniff"

@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<title>SINC2026 — Skål Club Congress Dashboard</title>
+<link rel="stylesheet" href="css/styles.css" />
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">
+      <img src="img/skal-logo.png" alt="Skål International" class="logo-mark" />
+      <div>
+        <h1>Skål International National Congress</h1>
+        <span>SINC2026 · Live Congress Dashboard · Doing Business Among Friends</span>
+      </div>
+    </div>
+    <nav>
+      <a href="admin.html">Admin</a>
+    </nav>
+  </div>
+</header>
+
+<main class="container">
+
+  <div class="section-title">Congress at a glance</div>
+  <div class="grid-stats" id="statCards"></div>
+
+  <div class="section-title">Membership &amp; Registrations</div>
+  <div class="two-col">
+    <div class="card">
+      <strong style="font-size:13px;color:var(--muted)">Club-wise: members vs registrations</strong>
+      <div class="chart-scroll" id="clubChartScroll">
+        <div id="clubChartInner"><canvas id="clubChart"></canvas></div>
+      </div>
+    </div>
+    <div class="card">
+      <strong style="font-size:13px;color:var(--muted)">Nation-wise members by state</strong>
+      <div style="height:320px;margin-top:10px;"><canvas id="stateChart"></canvas></div>
+    </div>
+  </div>
+
+  <div class="section-title">Club-wise data</div>
+  <div class="card table-scroll">
+    <table>
+      <thead>
+        <tr><th>Club</th><th>State</th><th>Members</th><th>Registrations</th><th>Participants</th><th>Collected (₹)</th></tr>
+      </thead>
+      <tbody id="clubTableBody"></tbody>
+    </table>
+  </div>
+
+  <div class="section-title">Catering &amp; Dietary Preferences</div>
+  <div class="grid-stats grid-stats-3" id="dietCards"></div>
+
+  <div class="section-title">Event video reel</div>
+  <div class="media-loop" id="videoLoop">
+    <div class="empty" style="color:#fff;padding:40px 0;">No videos uploaded yet — add some from Admin → Media.</div>
+  </div>
+
+  <div class="section-title">Posters &amp; event material</div>
+  <div class="media-loop" id="posterLoop">
+    <div class="empty" style="padding:40px 0;">No posters uploaded yet — add some from Admin → Media.</div>
+  </div>
+
+  <div class="section-title">Live happenings</div>
+  <div class="card" id="happeningsFeed">
+    <div class="empty">No updates posted yet.</div>
+  </div>
+
+  <div class="section-title">About the congress &amp; venue</div>
+  <div class="two-col">
+    <div class="card">
+      <strong style="font-size:13px;color:var(--muted)">The destination — Coimbatore</strong>
+      <p class="info-text">Coimbatore — the "Manchester of South India" — is a vibrant Tamil Nadu city near the Western Ghats, a major hub for textiles, engineering, education and healthcare, known for its entrepreneurial spirit and warm hospitality. Landmarks include the 112-foot Adiyogi Shiva Statue at the Isha Yoga Center, Marudhamalai Temple, and Siruvani Waterfalls.</p>
+    </div>
+    <div class="card">
+      <strong style="font-size:13px;color:var(--muted)">Congress venue — Le Méridien Coimbatore</strong>
+      <p class="info-text">Le Méridien Coimbatore is a luxury hotel near Coimbatore International Airport (CJB) and the city's business districts. It hosts SINC2026 with elegantly appointed rooms, refined dining, and premium wellness amenities balancing business with relaxation.</p>
+    </div>
+  </div>
+
+  <div class="section-title">Congress itinerary</div>
+  <div class="itinerary-grid">
+    <div class="card itin-day">
+      <div class="itin-day-label">12 Aug · Thu</div>
+      <div class="feed-item"><div class="time">Morning / Afternoon</div><div class="title">Check-in at your hotel</div><div class="desc">Arrival of delegates, lunch, registration &amp; check-in at your hotel.</div></div>
+      <div class="feed-item"><div class="time">Evening · 7:00 PM</div><div class="title">Welcome Gala Dinner</div><div class="desc">At The Hotel Residency Towers.</div></div>
+    </div>
+    <div class="card itin-day">
+      <div class="itin-day-label">13 Aug · Fri</div>
+      <div class="feed-item"><div class="time">Morning</div><div class="title">Breakfast at your hotel</div><div class="desc">Delegate check-in and welcome kit collection.</div></div>
+      <div class="feed-item"><div class="time">Noon</div><div class="title">India Congress General Assembly</div><div class="desc">Opening ceremony, B2B session at the congress venue &amp; conference lunch.</div></div>
+      <div class="feed-item"><div class="time">Afternoon</div><div class="title">B2B session at congress venue</div><div class="desc">Networking sessions, workshop tracks, and committee meetings.</div></div>
+      <div class="feed-item"><div class="time">Evening · 7:00 PM</div><div class="title">Entertainment &amp; Gala Dinner</div><div class="desc">Theme dinner &amp; entertainment at My Village Anaikatti.</div></div>
+    </div>
+    <div class="card itin-day">
+      <div class="itin-day-label">14 Aug · Sat</div>
+      <div class="feed-item"><div class="time">Morning</div><div class="title">Breakfast &amp; ISHA visit (tentative)</div><div class="desc">Breakfast at your hotel followed by an optional visit to Isha Yoga Center.</div></div>
+      <div class="feed-item"><div class="time">Noon</div><div class="title">Lunch at congress venue</div><div class="desc">Relaxed hosted lunch with dedicated networking time.</div></div>
+      <div class="feed-item"><div class="time">Afternoon</div><div class="title">B2B sessions &amp; presentations</div><div class="desc">AGM at the congress venue.</div></div>
+      <div class="feed-item"><div class="time">Evening · 7:00 PM</div><div class="title">Closing ceremony &amp; awards</div><div class="desc">Award night &amp; gala dinner at the congress venue.</div></div>
+    </div>
+    <div class="card itin-day">
+      <div class="itin-day-label">15 Aug · Sun</div>
+      <div class="feed-item"><div class="time">Morning</div><div class="title">Departure of delegates</div><div class="desc">Breakfast at your hotel, Independence Day flag hoisting at 8:00 AM, departure of delegates.</div></div>
+    </div>
+  </div>
+
+  <div class="section-title">Accommodation</div>
+  <div class="card table-scroll">
+    <table>
+      <thead><tr><th>Hotel</th><th>Category</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td>Le Méridien Coimbatore</td><td>★★★★★ Official Congress Hotel</td><td>The official congress hotel and venue — world-class luxury, grand ballrooms, refined dining.</td></tr>
+        <tr><td>O by Tamara</td><td>★★★★★ 5-Star</td><td>A contemporary urban retreat blending modern design with South Indian sensibilities.</td></tr>
+        <tr><td>The Residency Towers</td><td>★★★★★ 5-Star</td><td>An iconic city landmark with generous rooms, rooftop dining, and top-tier service.</td></tr>
+        <tr><td>Gokulam Park</td><td>★★★★ 4-Star</td><td>Warm hospitality, excellent cuisine, and spacious facilities — popular with business travellers.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="section-title">Official package pricing</div>
+  <p class="info-text" style="margin:-6px 0 12px;">Published congress rates, for reference alongside the actual amounts collected above. Early-bird rates were available until 31 May 2026; hotel accommodation is booked separately.</p>
+  <div class="card table-scroll">
+    <table>
+      <thead><tr><th>Package</th><th>Price (INR)</th><th>International (USD)</th><th>Includes</th></tr></thead>
+      <tbody>
+        <tr><td>Single Registration — Full Congress</td><td>₹25,000</td><td>$300 / delegate</td><td>All sessions, 3 gala dinners, conference lunches, delegate kit</td></tr>
+        <tr><td>Twin Registration — Full Congress</td><td>₹35,000</td><td>$400 / couple</td><td>All sessions, 3 gala dinners (both), conference lunches (both), city tour, delegate kits</td></tr>
+        <tr><td>Congress Only (domestic, no room)</td><td>₹15,000</td><td>—</td><td>All sessions, conference lunches, delegate kit</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="section-title">Useful information</div>
+  <div class="info-grid">
+    <div class="card info-card"><div class="info-icon">✈️</div><strong>Getting there</strong><p>Coimbatore International Airport (CJB) offers direct flights from major Indian cities and select international routes, plus rail/road links from Chennai, Bangalore and Kochi. Airport transfers can be arranged through the congress secretariat.</p></div>
+    <div class="card info-card"><div class="info-icon">🛂</div><strong>Visas &amp; entry</strong><p>Most nationalities can apply for an e-Visa online at least 4 days before arrival, or a Business Visa for delegates. Ensure passport validity of at least 6 months. The secretariat can provide support letters if needed.</p></div>
+    <div class="card info-card"><div class="info-icon">☀️</div><strong>Weather in August</strong><p>Warm, humid weather with occasional light showers — expect 22°C–31°C (72°F–88°F). Light layers and comfortable walking shoes are recommended.</p></div>
+    <div class="card info-card"><div class="info-icon">💱</div><strong>Currency &amp; payments</strong><p>The local currency is the Indian Rupee (INR). Major cards are widely accepted at hotels and restaurants, and ATMs are readily available; carry some cash for local markets and transport.</p></div>
+    <div class="card info-card"><div class="info-icon">🏥</div><strong>Health &amp; safety</strong><p>Coimbatore has excellent medical facilities. Travel insurance covering medical expenses and standard vaccinations for India are advisable. Bottled water is recommended.</p></div>
+    <div class="card info-card"><div class="info-icon">📱</div><strong>Connectivity</strong><p>Strong mobile coverage across the city. International SIM cards and data plans are available at the airport, and all congress venues provide high-speed Wi-Fi.</p></div>
+  </div>
+
+  <div class="section-title">Skål Coimbatore — congress leadership</div>
+  <div class="leader-grid">
+    <div class="card leader-card"><img src="https://sinc2026.org/leaders/1.webp" alt="A Ramesh Chandrakumar" /><strong>A Ramesh Chandrakumar</strong><span>President</span></div>
+    <div class="card leader-card"><img src="https://sinc2026.org/leaders/2.webp" alt="Nijo Augustin" /><strong>Nijo Augustin</strong><span>Secretary / Web Admin</span></div>
+    <div class="card leader-card"><img src="https://sinc2026.org/leaders/3.webp" alt="Raj Kumar Renga Raju" /><strong>Raj Kumar Renga Raju</strong><span>Treasurer</span></div>
+    <div class="card leader-card"><img src="https://sinc2026.org/leaders/4.webp" alt="PK Ganesh" /><strong>PK Ganesh</strong><span>Congress Chair</span></div>
+    <div class="card leader-card"><img src="https://sinc2026.org/leaders/5.webp" alt="Muthukumar K" /><strong>Muthukumar K</strong><span>Congress Secretary</span></div>
+    <div class="card leader-card"><img src="https://sinc2026.org/leaders/6.webp" alt="Ramasamy Ranganathen" /><strong>Ramasamy Ranganathen</strong><span>Congress Treasurer</span></div>
+    <div class="card leader-card"><img src="https://sinc2026.org/leaders/7.webp" alt="S Amarnath" /><strong>S Amarnath</strong><span>Congress Joint Secretary</span></div>
+    <div class="card leader-card"><img src="https://sinc2026.org/leaders/8.webp" alt="Gugan Ilango" /><strong>Gugan Ilango</strong><span>Congress Sponsorship Chair</span></div>
+  </div>
+  <p class="info-text" style="text-align:center;margin-top:6px;">Source: <a href="https://sinc2026.org" target="_blank" rel="noopener">sinc2026.org</a> — official SINC2026 congress website.</p>
+
+</main>
+
+<footer>SINC2026 · Skål Club Congress · Skålleagues connecting tourism globally · Dashboard auto-refreshes every 30s</footer>
+
+<script src="js/config.js"></script>
+<script src="js/dashboard.js"></script>
+</body>
+</html>

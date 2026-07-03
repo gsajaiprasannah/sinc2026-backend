@@ -1,0 +1,23 @@
+name,city,state,zone,members_count
+Bangalore,Bangalore,Karnataka,South,142
+Chennai,Chennai,Tamil Nadu,South,179
+Pune,Pune,Maharashtra,West,48
+Bombay,Bombay,Maharashtra,West,76
+Hyderabad,Hyderabad,Telangana,South,63
+Kashmir,Kashmir,Jammu & Kashmir,North,73
+Mysuru,Mysuru,Karnataka,South,30
+Mumbai South,Mumbai,Maharashtra,West,43
+Bhubaneswar,Bhubaneswar,Odisha,East,22
+Kolkata,Kolkata,West Bengal,East,126
+New Delhi,New Delhi,Delhi,North,198
+Bhopal,Bhopal,Madhya Pradesh,North,19
+Colombo,Colombo,International,International,0
+Kuala Lumpur,Kuala Lumpur,International,International,0
+Surat,Surat,Gujarat,West,33
+Jaipur,Jaipur,Rajasthan,North,24
+Kochi,Kochi,Kerala,South,64
+Chandigarh,Chandigarh,Chandigarh,North,14
+Coimbatore,Coimbatore,Tamil Nadu,South,73
+Goa,Goa,Goa,West,105
+Lucknow,Lucknow,Uttar Pradesh,North,30
+Trivandrum,Trivandrum,Kerala,South,12

@@ -1,0 +1,7 @@
+node_modules/
+server/data/
+public/uploads/videos/*
+public/uploads/posters/*
+!public/uploads/videos/.gitkeep
+!public/uploads/posters/.gitkeep
+npm-debug.log

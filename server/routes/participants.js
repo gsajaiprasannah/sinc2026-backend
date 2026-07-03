@@ -1,0 +1,145 @@
+const express = require('express');
+const multer = require('multer');
+const { parse } = require('csv-parse/sync');
+const db = require('../db');
+
+const router = express.Router();
+const upload = multer({ storage: multer.memoryStorage() });
+
+const FIELDS = [
+  'registration_id', 'is_primary', 'name', 'phone', 'whatsapp', 'email', 'address', 'club_id', 'designation',
+  'dietary_preference',
+  'travel_mode', 'travel_number', 'travel_datetime', 'arrival_point',
+  'departure_mode', 'departure_number', 'departure_datetime',
+  'pickup_by', 'pickup_vehicle', 'pickup_phone', 'spoc_name', 'spoc_phone', 'notes'
+];
+
+router.get('/', async (req, res) => {
+  try {
+    const search = req.query.q ? `%${req.query.q}%` : null;
+    const rows = search
+      ? await db.all(`
+          SELECT p.*, r.reg_number, r.reg_type, r.payment_status, c.name AS club_name
+          FROM participants p
+          LEFT JOIN registrations r ON r.id = p.registration_id
+          LEFT JOIN clubs c ON c.id = p.club_id
+          WHERE p.name ILIKE $1 OR p.phone ILIKE $1 OR r.reg_number ILIKE $1 OR c.name ILIKE $1
+          ORDER BY p.created_at DESC
+        `, [search])
+      : await db.all(`
+          SELECT p.*, r.reg_number, r.reg_type, r.payment_status, c.name AS club_name
+          FROM participants p
+          LEFT JOIN registrations r ON r.id = p.registration_id
+          LEFT JOIN clubs c ON c.id = p.club_id
+          ORDER BY p.created_at DESC
+        `);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.get('/:id', async (req, res) => {
+  try {
+    const row = await db.get(`
+      SELECT p.*, r.reg_number, r.reg_type, r.payment_status, c.name AS club_name
+      FROM participants p
+      LEFT JOIN registrations r ON r.id = p.registration_id
+      LEFT JOIN clubs c ON c.id = p.club_id
+      WHERE p.id = $1
+    `, [req.params.id]);
+    if (!row) return res.status(404).json({ error: 'not found' });
+    res.json(row);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post('/', async (req, res) => {
+  const body = req.body;
+  if (!body.name) return res.status(400).json({ error: 'name is required' });
+  const cols = FIELDS.filter((f) => body[f] !== undefined);
+  const placeholders = cols.map((_, i) => `$${i + 1}`).join(',');
+  const values = cols.map((c) => body[c]);
+  try {
+    const result = await db.run(
+      `INSERT INTO participants (${cols.join(',')}) VALUES (${placeholders}) RETURNING id`,
+      values
+    );
+    res.json({ id: result.id });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+router.put('/:id', async (req, res) => {
+  const body = req.body;
+  const cols = FIELDS.filter((f) => body[f] !== undefined);
+  if (cols.length === 0) return res.json({ ok: true });
+  const setClause = cols.map((c, i) => `${c}=$${i + 1}`).join(',');
+  const values = cols.map((c) => body[c]);
+  try {
+    await db.run(`UPDATE participants SET ${setClause} WHERE id=$${cols.length + 1}`, [...values, req.params.id]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+router.delete('/:id', async (req, res) => {
+  await db.run('DELETE FROM participants WHERE id=$1', [req.params.id]);
+  res.json({ ok: true });
+});
+
+// Bulk CSV upload matching participant + dietary + travel + pickup + SPOC fields
+router.post('/bulk-upload', upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'CSV file is required (field name: file)' });
+  try {
+    const records = parse(req.file.buffer.toString('utf8'), { columns: true, skip_empty_lines: true, trim: true });
+    let imported = 0;
+    await db.transaction(async (tx) => {
+      for (const r of records) {
+        const club = r.club_name ? await tx.get('SELECT id FROM clubs WHERE name = $1', [r.club_name]) : null;
+        const reg = r.reg_number ? await tx.get('SELECT id FROM registrations WHERE reg_number = $1', [r.reg_number]) : null;
+        await tx.run(`
+          INSERT INTO participants
+            (registration_id, is_primary, name, phone, whatsapp, email, address, club_id, designation, dietary_preference,
+             travel_mode, travel_number, travel_datetime, arrival_point,
+             departure_mode, departure_number, departure_datetime,
+             pickup_by, pickup_vehicle, pickup_phone, spoc_name, spoc_phone, notes)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+        `, [
+          reg ? reg.id : null,
+          r.is_primary !== undefined ? Number(r.is_primary) : 1,
+          r.name || '',
+          r.phone || '',
+          r.whatsapp || r.phone || '',
+          r.email || '',
+          r.address || '',
+          club ? club.id : null,
+          r.designation || '',
+          r.dietary_preference || null,
+          r.travel_mode || null,
+          r.travel_number || '',
+          r.travel_datetime || '',
+          r.arrival_point || '',
+          r.departure_mode || null,
+          r.departure_number || '',
+          r.departure_datetime || '',
+          r.pickup_by || '',
+          r.pickup_vehicle || '',
+          r.pickup_phone || '',
+          r.spoc_name || '',
+          r.spoc_phone || '',
+          r.notes || ''
+        ]);
+        imported++;
+      }
+    });
+    res.json({ ok: true, imported });
+  } catch (e) {
+    res.status(400).json({ error: 'Failed to parse/import CSV: ' + e.message });
+  }
+});
+
+module.exports = router;
