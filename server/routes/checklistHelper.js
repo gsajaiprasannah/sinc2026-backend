@@ -98,12 +98,49 @@ async function deleteChecklistForOwner(ownerType, ownerId) {
 // are globally unique regardless of which owner they belong to. Also hosts
 // the cross-committee Delivery Monitor endpoints (registered before the
 // /:itemId routes so literal paths like /monitor aren't swallowed as ids).
+const BULK_ASSIGN_OWNER_TYPES = ['sponsor', 'speaker', 'guest_visitor', 'participant', 'host_member'];
+
 function buildChecklistItemsRouter() {
   const express = require('express');
   const router = express.Router();
   const { attachDeliveryMonitorRoutes } = require('./deliveryMonitor');
 
   attachDeliveryMonitorRoutes(router);
+
+  // Hand-picked bulk assign: one checklist item -> many owners of the same
+  // type in a single call, instead of opening each Sponsor/Speaker/Guest
+  // Visitor/Delegate/Host Member one at a time and adding the item there.
+  // This is a separate, one-off action from Master Checklist Templates
+  // (which auto-syncs onto EVERY existing owner of a type on save/edit) —
+  // here the admin explicitly picks which owner_ids get it, right now.
+  // Registered before /:itemId so the literal path isn't swallowed as an id.
+  router.post('/bulk-assign', async (req, res) => {
+    const { owner_type, owner_ids, label, category, responsible_committee_id, due_date } = req.body;
+    if (!BULK_ASSIGN_OWNER_TYPES.includes(owner_type)) {
+      return res.status(400).json({ error: 'Invalid owner_type' });
+    }
+    if (!Array.isArray(owner_ids) || !owner_ids.length) {
+      return res.status(400).json({ error: 'owner_ids array is required' });
+    }
+    if (!label || !label.trim()) return res.status(400).json({ error: 'label is required' });
+    try {
+      const ids = [];
+      for (const ownerId of owner_ids) {
+        const result = await db.run(`
+          INSERT INTO checklist_items (owner_type, owner_id, category, label, status, responsible_committee_id, due_date)
+          SELECT $1,$2,$3,$4,'pending',$5,$6
+          WHERE NOT EXISTS (
+            SELECT 1 FROM checklist_items WHERE owner_type=$1 AND owner_id=$2 AND category=$3 AND label=$4
+          )
+          RETURNING id
+        `, [owner_type, ownerId, category || '', label.trim(), responsible_committee_id || null, due_date || null]);
+        if (result.id !== undefined) ids.push(result.id);
+      }
+      res.json({ created: ids.length, skipped: owner_ids.length - ids.length, ids });
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
 
   router.put('/:itemId', async (req, res) => {
     const body = req.body;
