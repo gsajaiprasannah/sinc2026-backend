@@ -56,6 +56,12 @@ function attachChecklistRoutes(router, ownerType) {
   // template" buttons in the admin UI). Each item can carry over its
   // template's default responsible_committee_id — still just free-text
   // labels otherwise, nothing enforced at the DB level.
+  //
+  // Skips any label this owner already has a checklist item for. Without
+  // this, clicking "Add all suggested items" a second time — or saving a
+  // master template (which now auto-creates its item on every existing
+  // owner; see checklistTemplates.js) followed by a manual "add all" click —
+  // would insert a second, duplicate row for the same label.
   router.post('/:id/checklist/bulk', async (req, res) => {
     const { items } = req.body; // [{ label, category, responsible_committee_id }, ...]
     if (!Array.isArray(items) || !items.length) return res.status(400).json({ error: 'items array is required' });
@@ -65,9 +71,13 @@ function attachChecklistRoutes(router, ownerType) {
         if (!item || !item.label || !item.label.trim()) continue;
         const result = await db.run(`
           INSERT INTO checklist_items (owner_type, owner_id, category, label, status, responsible_committee_id)
-          VALUES ($1,$2,$3,$4,'pending',$5) RETURNING id
+          SELECT $1,$2,$3,$4,'pending',$5
+          WHERE NOT EXISTS (
+            SELECT 1 FROM checklist_items WHERE owner_type=$1 AND owner_id=$2 AND category=$3 AND label=$4
+          )
+          RETURNING id
         `, [ownerType, req.params.id, item.category || '', item.label.trim(), item.responsible_committee_id || null]);
-        ids.push(result.id);
+        if (result.id !== undefined) ids.push(result.id);
       }
       res.json({ ids });
     } catch (e) {

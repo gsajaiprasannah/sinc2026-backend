@@ -20,12 +20,85 @@ const db = require('../db');
 const router = express.Router();
 
 const OWNER_TYPES = ['sponsor', 'speaker', 'guest_visitor', 'participant', 'host_member'];
+const OWNER_TABLES = {
+  sponsor: 'sponsors',
+  speaker: 'speakers',
+  guest_visitor: 'guest_visitors',
+  participant: 'participants',
+  host_member: 'host_members'
+};
 
 const SELECT_WITH_COMMITTEE = `
   SELECT t.*, c.name AS responsible_committee_name
   FROM checklist_templates t
   LEFT JOIN committees c ON c.id = t.responsible_committee_id
 `;
+
+// Templates are meant to be the definitive "this must be accomplished for
+// every X" list, not just a copy-paste menu — so saving one (create or edit,
+// including just assigning/changing its committee) immediately reaches out
+// to every EXISTING entity of that owner_type: it creates the checklist item
+// if that entity doesn't have it yet, and — for items that already exist but
+// were never given a committee of their own (still following whichever
+// default applied when they were added) — updates them to the template's
+// current committee. Items that already have their own explicit committee
+// override are never touched, preserving the "template default + per-item
+// override" design. Without this sync, assigning a committee to a template
+// only affects checklist items created AFTER that point via quick-add,
+// which looked like the assignment "wasn't reflecting" anywhere for anyone
+// already on the list.
+// Only the "adopt the committee" half — used on its own to catch items still
+// sitting under a template's OLD label/category right before a rename, so
+// they aren't stranded without ever receiving whatever committee was just
+// assigned. Never creates new items (that would create orphans under a
+// label about to become stale).
+async function syncCommitteeForExistingItems(ownerType, category, label, committeeId) {
+  if (committeeId === null || committeeId === undefined) return 0;
+  const result = await db.run(
+    `UPDATE checklist_items SET responsible_committee_id=$1, updated_at=NOW()
+     WHERE owner_type=$2 AND category=$3 AND label=$4 AND responsible_committee_id IS NULL
+     RETURNING id`,
+    [committeeId, ownerType, category || '', label]
+  );
+  return result.rowCount || 0;
+}
+
+// Templates are meant to be the definitive "this must be accomplished for
+// every X" list, not just a copy-paste menu — so saving one (create or edit,
+// including just assigning/changing its committee) immediately reaches out
+// to every EXISTING entity of that owner_type: it creates the checklist item
+// if that entity doesn't have it yet, and — for items that already exist but
+// were never given a committee of their own (still following whichever
+// default applied when they were added) — updates them to the template's
+// current committee. Items that already have their own explicit committee
+// override are never touched, preserving the "template default + per-item
+// override" design. Without this sync, assigning a committee to a template
+// only affects checklist items created AFTER that point via quick-add,
+// which looked like the assignment "wasn't reflecting" anywhere for anyone
+// already on the list.
+async function syncTemplateToExistingEntities(template) {
+  const table = OWNER_TABLES[template.owner_type];
+  if (!table) return { created: 0, updated: 0 };
+  const category = template.category || '';
+  const label = template.label;
+  const committeeId = template.responsible_committee_id || null;
+
+  const createResult = await db.run(
+    `INSERT INTO checklist_items (owner_type, owner_id, category, label, status, sort_order, responsible_committee_id)
+     SELECT $1, e.id, $2, $3, 'pending', $4, $5
+     FROM ${table} e
+     WHERE NOT EXISTS (
+       SELECT 1 FROM checklist_items ci
+       WHERE ci.owner_type=$1 AND ci.owner_id=e.id AND ci.category=$2 AND ci.label=$3
+     )
+     RETURNING id`,
+    [template.owner_type, category, label, template.sort_order || 0, committeeId]
+  );
+
+  const updated = await syncCommitteeForExistingItems(template.owner_type, category, label, committeeId);
+
+  return { created: createResult.rowCount || 0, updated };
+}
 
 router.get('/', async (req, res) => {
   try {
@@ -53,7 +126,9 @@ router.post('/', async (req, res) => {
       `INSERT INTO checklist_templates (owner_type, category, label, sort_order, responsible_committee_id) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
       [owner_type, category || '', label.trim(), Number(sort_order) || 0, responsible_committee_id || null]
     );
-    res.json({ id: result.id });
+    const template = await db.get('SELECT * FROM checklist_templates WHERE id=$1', [result.id]);
+    const sync = await syncTemplateToExistingEntities(template);
+    res.json({ id: result.id, sync });
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
@@ -76,7 +151,18 @@ router.put('/:id', async (req, res) => {
       `UPDATE checklist_templates SET category=$1, label=$2, sort_order=$3, responsible_committee_id=$4 WHERE id=$5`,
       [category, label, sort_order, responsible_committee_id, req.params.id]
     );
-    res.json({ ok: true });
+    // If the label/category changed, also sync any existing items still
+    // under the OLD label so they aren't stranded without ever having
+    // received the (possibly brand-new) committee assignment being saved
+    // here — then sync again under the new identity for creation/backfill.
+    // Uses the committee-only helper (never creates) so a rename can't spawn
+    // orphaned items under the label that's being replaced.
+    if (existing.label !== label || (existing.category || '') !== category) {
+      await syncCommitteeForExistingItems(existing.owner_type, existing.category, existing.label, responsible_committee_id);
+    }
+    const template = await db.get('SELECT * FROM checklist_templates WHERE id=$1', [req.params.id]);
+    const sync = await syncTemplateToExistingEntities(template);
+    res.json({ ok: true, sync });
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
