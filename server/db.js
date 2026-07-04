@@ -445,7 +445,10 @@ async function initSchema() {
       updated_at TIMESTAMP DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS checklist_items_owner_idx ON checklist_items(owner_type, owner_id);
-    CREATE INDEX IF NOT EXISTS checklist_items_committee_idx ON checklist_items(responsible_committee_id);
+    -- checklist_items_committee_idx is created later, after the
+    -- responsible_committee_id backfill below — on a database where this
+    -- table already existed pre-migration, CREATE TABLE IF NOT EXISTS above
+    -- is a no-op and the column wouldn't exist yet at this point.
 
     -- --- Master checklist templates: the predefined set of checklist items ---
     -- --- that SHOULD be completed for each category (Delegates, Host        ---
@@ -590,6 +593,9 @@ async function initSchema() {
   await pool.query(`ALTER TABLE checklist_items ADD COLUMN IF NOT EXISTS completed_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL;`);
   await pool.query(`ALTER TABLE checklist_items ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP;`);
   await pool.query(`ALTER TABLE checklist_templates ADD COLUMN IF NOT EXISTS responsible_committee_id INTEGER REFERENCES committees(id) ON DELETE SET NULL;`);
+  // Safe now — responsible_committee_id is guaranteed to exist on every
+  // database by this point (freshly created with it, or just backfilled above).
+  await pool.query(`CREATE INDEX IF NOT EXISTS checklist_items_committee_idx ON checklist_items(responsible_committee_id);`);
 
   // One-time seed of the master checklist templates — only runs while the
   // table is still empty, so it never overwrites anything an admin has since
