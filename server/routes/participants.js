@@ -2,6 +2,7 @@ const express = require('express');
 const multer = require('multer');
 const { parse } = require('csv-parse/sync');
 const db = require('../db');
+const { attachChecklistRoutes, deleteChecklistForOwner } = require('./checklistHelper');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -177,9 +178,15 @@ router.put('/:id', async (req, res) => {
 });
 
 router.delete('/:id', async (req, res) => {
+  await deleteChecklistForOwner('participant', req.params.id);
   await db.run('DELETE FROM participants WHERE id=$1', [req.params.id]);
   res.json({ ok: true });
 });
+
+// Goodies/kit handover checklist (welcome kit, delegate bag, souvenir, ID
+// badge, etc.) — fully customizable per delegate, same generic mechanism used
+// for sponsor benefits / speaker checklists. GET/POST /:id/checklist.
+attachChecklistRoutes(router, 'participant');
 
 // Bulk CSV upload matching participant + dietary + travel + pickup + SPOC fields
 router.post('/bulk-upload', upload.single('file'), async (req, res) => {

@@ -2,6 +2,7 @@ const express = require('express');
 const multer = require('multer');
 const { parse } = require('csv-parse/sync');
 const db = require('../db');
+const { attachChecklistRoutes, deleteChecklistForOwner } = require('./checklistHelper');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -130,9 +131,14 @@ router.put('/:id', async (req, res) => {
 });
 
 router.delete('/:id', async (req, res) => {
+  await deleteChecklistForOwner('host_member', req.params.id);
   await db.run('DELETE FROM host_members WHERE id=$1', [req.params.id]);
   res.json({ ok: true });
 });
+
+// Goodies/kit handover checklist — same generic mechanism as sponsors/speakers.
+// GET/POST /:id/checklist.
+attachChecklistRoutes(router, 'host_member');
 
 // Bulk CSV upload: name,email,phone,company,designation,category
 // Matches existing host members by phone number (or exact name if no phone

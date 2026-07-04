@@ -1,0 +1,255 @@
+const API = ((window.SINC_CONFIG && window.SINC_CONFIG.API_BASE_URL) || '/api').replace(/\/$/, '');
+
+// Separate token key from admin.js so a host-member login and an admin
+// login can coexist in the same browser without clobbering each other.
+const TOKEN_KEY = 'sinc_host_token';
+let CURRENT_USER = null;
+
+function getToken() { return localStorage.getItem(TOKEN_KEY) || ''; }
+function setToken(t) { if (t) localStorage.setItem(TOKEN_KEY, t); else localStorage.removeItem(TOKEN_KEY); }
+
+function authHeaders(extra) {
+  const h = Object.assign({}, extra || {});
+  const t = getToken();
+  if (t) h['Authorization'] = 'Bearer ' + t;
+  return h;
+}
+
+let toastTimer = null;
+function toast(msg, durationMs) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), durationMs || 2200);
+}
+
+class UnauthorizedError extends Error {}
+function handleUnauthorized() {
+  setToken('');
+  CURRENT_USER = null;
+  showAuthGate();
+  toast('Your session expired — please log in again.');
+}
+
+async function jget(url) {
+  const r = await fetch(url, { headers: authHeaders() });
+  if (r.status === 401) { handleUnauthorized(); throw new UnauthorizedError('Please log in again.'); }
+  if (!r.ok) {
+    const text = await r.text();
+    try { throw new Error(JSON.parse(text).error || text); } catch (parseErr) {
+      if (parseErr instanceof SyntaxError) throw new Error(text);
+      throw parseErr;
+    }
+  }
+  return r.json();
+}
+async function jput(url, body) {
+  const r = await fetch(url, { method: 'PUT', headers: authHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify(body) });
+  if (r.status === 401) { handleUnauthorized(); throw new UnauthorizedError('Please log in again.'); }
+  const data = await r.json();
+  if (!r.ok) { const err = new Error(data.error || 'Request failed'); err.data = data; err.status = r.status; throw err; }
+  return data;
+}
+
+// --- Auth ---
+function showAuthGate() {
+  document.getElementById('authGate').style.display = 'block';
+  document.getElementById('appShell').style.display = 'none';
+  document.getElementById('logoutLink').style.display = 'none';
+  document.getElementById('whoami').textContent = '';
+}
+function showApp() {
+  document.getElementById('authGate').style.display = 'none';
+  document.getElementById('appShell').style.display = 'block';
+  document.getElementById('logoutLink').style.display = '';
+  document.getElementById('whoami').textContent = CURRENT_USER ? CURRENT_USER.username : '';
+  loadMe();
+}
+
+document.getElementById('loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const errEl = document.getElementById('loginError');
+  errEl.style.display = 'none';
+  const fd = new FormData(e.target);
+  try {
+    const r = await fetch(`${API}/auth/login`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(Object.fromEntries(fd.entries()))
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Login failed');
+    if (data.user.role !== 'host_member') {
+      throw new Error('This login is not a host member account. Admins should use admin.html instead.');
+    }
+    setToken(data.token);
+    CURRENT_USER = data.user;
+    e.target.reset();
+    showApp();
+  } catch (err) {
+    errEl.textContent = err.message;
+    errEl.style.display = 'block';
+  }
+});
+
+document.getElementById('logoutLink').addEventListener('click', (e) => {
+  e.preventDefault();
+  setToken('');
+  CURRENT_USER = null;
+  showAuthGate();
+});
+
+async function tryResumeSession() {
+  const t = getToken();
+  if (!t) { showAuthGate(); return; }
+  try {
+    const user = await jget(`${API}/auth/me`);
+    if (user.role !== 'host_member') { handleUnauthorized(); return; }
+    CURRENT_USER = user;
+    showApp();
+  } catch (e) {
+    showAuthGate();
+  }
+}
+
+// --- Main data load ---
+const STATUS_LABEL = { not_started: 'Not started', in_progress: 'In progress', completed: 'Completed', pending: 'Pending', done: 'Done' };
+
+async function loadMe() {
+  let data;
+  try {
+    data = await jget(`${API}/host/me`);
+  } catch (err) {
+    if (err instanceof UnauthorizedError) return;
+    document.getElementById('profileBody').innerHTML = `<p class="hint" style="color:var(--red);">${err.message}</p>`;
+    return;
+  }
+  renderProfile(data.profile);
+  renderPayment(data.profile);
+  renderCommittees(data.committees);
+  renderAssignments(data.assignments);
+  renderTasks(data.tasks);
+  renderSponsorRelations(data.sponsorRelations);
+  renderGoodiesChecklist(data.goodiesChecklist);
+}
+
+function renderProfile(p) {
+  document.getElementById('profileBody').innerHTML = `
+    <p><strong>${p.name}</strong>${p.designation ? ' — ' + p.designation : ''}</p>
+    <p class="hint">${[p.company, p.category].filter(Boolean).join(' · ') || '-'}</p>
+    <p class="hint">${[p.phone, p.email].filter(Boolean).join(' · ') || '-'}</p>
+  `;
+}
+
+function renderPayment(p) {
+  document.getElementById('paymentBody').innerHTML = `
+    <p><span class="pill ${p.payment_status}">${p.payment_status}</span> &nbsp; ₹${p.payment_amount}</p>
+    <p class="hint">${p.payment_mode ? 'Paid via ' + p.payment_mode : 'No payment mode on file yet'}${p.payment_date ? ' on ' + new Date(p.payment_date).toLocaleDateString() : ''}</p>
+    <p class="hint">Contact the admin team if this doesn't look right — payment records are managed from the admin panel.</p>
+  `;
+}
+
+function renderCommittees(committees) {
+  document.getElementById('myCommitteesBody').innerHTML = (committees || []).map((c) =>
+    `<span class="pill single" style="margin:0 6px 6px 0;display:inline-block;">${c.name}</span>`
+  ).join('') || '<p class="hint">You are not yet assigned to a committee.</p>';
+}
+
+function renderAssignments(rows) {
+  document.getElementById('myAssignmentsBody').innerHTML = (rows || []).map((a) => `
+    <tr>
+      <td>${a.participant_name}<br><span class="hint">${a.participant_code || ''}</span></td>
+      <td>${a.club_name || '-'}<br><span class="hint">${a.reg_number || ''}</span></td>
+      <td>${a.role ? `<span class="pill ${String(a.role).toLowerCase() === 'spoc' ? 'double' : 'single'}">${a.role}</span>` : '<span class="hint">-</span>'}</td>
+      <td>${a.travel_mode ? a.travel_mode + (a.travel_number ? ' · ' + a.travel_number : '') : '-'}${a.arrival_point ? '<br><span class="hint">' + a.arrival_point + '</span>' : ''}</td>
+      <td>
+        <select onchange="updateAssignmentStatus(${a.id}, this.value)">
+          <option value="not_started" ${a.status === 'not_started' ? 'selected' : ''}>Not started</option>
+          <option value="in_progress" ${a.status === 'in_progress' ? 'selected' : ''}>In progress</option>
+          <option value="completed" ${a.status === 'completed' ? 'selected' : ''}>Completed</option>
+        </select>
+      </td>
+      <td><input type="text" value="${(a.notes || '').replace(/"/g, '&quot;')}" onchange="updateAssignmentNotes(${a.id}, this.value)" placeholder="Add a note..." /></td>
+    </tr>
+  `).join('') || '<tr><td colspan="6" class="empty">No delegates assigned to you yet</td></tr>';
+}
+window.updateAssignmentStatus = async (id, status) => {
+  try { await jput(`${API}/host/assignments/${id}`, { status }); toast('Status updated'); }
+  catch (err) { if (!(err instanceof UnauthorizedError)) toast(err.message); }
+};
+window.updateAssignmentNotes = async (id, notes) => {
+  try { await jput(`${API}/host/assignments/${id}`, { notes }); toast('Note saved'); }
+  catch (err) { if (!(err instanceof UnauthorizedError)) toast(err.message); }
+};
+
+function renderTasks(rows) {
+  document.getElementById('myTasksBody').innerHTML = (rows || []).map((t) => `
+    <tr>
+      <td>${t.title}${t.description ? '<br><span class="hint">' + t.description + '</span>' : ''}</td>
+      <td>${Number(t.is_milestone) ? '<span class="pill double">Milestone</span>' : '<span class="hint">Checklist</span>'}</td>
+      <td>${t.due_date ? new Date(t.due_date).toLocaleDateString() : '-'}</td>
+      <td>
+        <select onchange="updateTaskStatus(${t.id}, this.value)">
+          <option value="pending" ${t.status === 'pending' ? 'selected' : ''}>Pending</option>
+          <option value="in_progress" ${t.status === 'in_progress' ? 'selected' : ''}>In progress</option>
+          <option value="done" ${t.status === 'done' ? 'selected' : ''}>Done</option>
+        </select>
+      </td>
+    </tr>
+  `).join('') || '<tr><td colspan="4" class="empty">No checklist items yet</td></tr>';
+}
+window.updateTaskStatus = async (id, status) => {
+  try { await jput(`${API}/host/tasks/${id}`, { status }); toast('Status updated'); }
+  catch (err) { if (!(err instanceof UnauthorizedError)) toast(err.message); }
+};
+
+// --- Sponsors I'm the Guest Relation contact for (with their benefit checklist) ---
+function checklistRowsHtml(items) {
+  return (items || []).map((it) => `
+    <div class="checklist-row status-${it.status}">
+      <select onchange="updateHostChecklistStatus(${it.id}, this.value)">
+        <option value="pending" ${it.status === 'pending' ? 'selected' : ''}>Pending</option>
+        <option value="in_progress" ${it.status === 'in_progress' ? 'selected' : ''}>In progress</option>
+        <option value="done" ${it.status === 'done' ? 'selected' : ''}>Done</option>
+      </select>
+      <span class="checklist-label">${it.label}</span>
+    </div>
+  `).join('') || '<p class="hint">Nothing on this checklist yet.</p>';
+}
+
+function renderSponsorRelations(sponsors) {
+  const card = document.getElementById('sponsorRelationsCard');
+  if (!sponsors || !sponsors.length) { card.style.display = 'none'; return; }
+  card.style.display = '';
+  document.getElementById('sponsorRelationsBody').innerHTML = sponsors.map((s) => `
+    <div style="margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--line);">
+      <p style="margin:0 0 6px;"><strong>${s.name}</strong>${s.tier ? ' <span class="hint">(' + s.tier + ')</span>' : ''}</p>
+      <p class="hint" style="margin:0 0 8px;">${[s.contact_person, s.phone, s.email].filter(Boolean).join(' · ') || 'No contact details on file'}</p>
+      ${checklistRowsHtml(s.checklist)}
+    </div>
+  `).join('');
+}
+
+// --- My kit / souvenir handover checklist ---
+function renderGoodiesChecklist(items) {
+  document.getElementById('goodiesBody').innerHTML = checklistRowsHtml(items);
+}
+
+window.updateHostChecklistStatus = async (id, status) => {
+  try { await jput(`${API}/host/checklist/${id}`, { status }); toast('Status updated'); }
+  catch (err) { if (!(err instanceof UnauthorizedError)) toast(err.message); }
+};
+
+document.getElementById('changePasswordForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  try {
+    await jput(`${API}/auth/me/password`, Object.fromEntries(fd.entries()));
+    e.target.reset();
+    toast('Password updated');
+  } catch (err) {
+    if (!(err instanceof UnauthorizedError)) toast(err.message);
+  }
+});
+
+tryResumeSession();

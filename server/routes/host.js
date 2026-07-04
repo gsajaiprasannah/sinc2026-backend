@@ -55,7 +55,26 @@ router.get('/me', requireHostMember, async (req, res) => {
       SELECT * FROM host_tasks WHERE host_member_id = $1
       ORDER BY status, due_date NULLS LAST, created_at
     `, [id]);
-    res.json({ profile, committees, assignments, tasks });
+    // Sponsors this host member is the "Guest Relation" liaison for — a
+    // responsibility that lives on the sponsor record (guest_relation_host_member_id)
+    // but needs to surface here too, same idea as the delegate/SPOC assignments above.
+    const sponsorRelations = await db.all(`
+      SELECT id, name, tier, contact_person, phone, email, sponsor_pass_code, status
+      FROM sponsors WHERE guest_relation_host_member_id = $1
+      ORDER BY name
+    `, [id]);
+    for (const sponsor of sponsorRelations) {
+      sponsor.checklist = await db.all(
+        `SELECT * FROM checklist_items WHERE owner_type='sponsor' AND owner_id=$1 ORDER BY sort_order, id`,
+        [sponsor.id]
+      );
+    }
+    // This host member's own goodies/kit handover checklist.
+    const goodiesChecklist = await db.all(
+      `SELECT * FROM checklist_items WHERE owner_type='host_member' AND owner_id=$1 ORDER BY sort_order, id`,
+      [id]
+    );
+    res.json({ profile, committees, assignments, tasks, sponsorRelations, goodiesChecklist });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -82,6 +101,31 @@ router.put('/tasks/:id', requireHostMember, async (req, res) => {
     if (!owned) return res.status(404).json({ error: 'Task not found.' });
     const { status } = req.body;
     await db.run('UPDATE host_tasks SET status=COALESCE($1,status), updated_at=NOW() WHERE id=$2', [status || null, req.params.id]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// Update the status of a checklist item this host member is allowed to
+// touch: either their own goodies/kit checklist, or the benefit checklist of
+// a sponsor they're the Guest Relation contact for.
+router.put('/checklist/:id', requireHostMember, async (req, res) => {
+  try {
+    const item = await db.get('SELECT * FROM checklist_items WHERE id=$1', [req.params.id]);
+    if (!item) return res.status(404).json({ error: 'Checklist item not found.' });
+    let allowed = false;
+    if (item.owner_type === 'host_member' && String(item.owner_id) === String(req.hostMemberId)) allowed = true;
+    if (item.owner_type === 'sponsor') {
+      const sponsor = await db.get('SELECT id FROM sponsors WHERE id=$1 AND guest_relation_host_member_id=$2', [item.owner_id, req.hostMemberId]);
+      if (sponsor) allowed = true;
+    }
+    if (!allowed) return res.status(403).json({ error: 'You are not able to update this checklist item.' });
+    const { status, notes } = req.body;
+    await db.run(
+      'UPDATE checklist_items SET status=COALESCE($1,status), notes=COALESCE($2,notes), updated_at=NOW() WHERE id=$3',
+      [status || null, notes !== undefined ? notes : null, req.params.id]
+    );
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });

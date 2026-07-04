@@ -8,6 +8,15 @@ function mediaUrl(p) {
   return MEDIA_ORIGIN + p;
 }
 
+// Routes downloads through our own backend (so the file always saves with a
+// friendly name and a forced download, regardless of the media host's CORS
+// setup) — falls back to the direct file URL when there's no backend (static
+// data mode).
+function mediaDownloadUrl(item) {
+  if (HAS_BACKEND && item && item.id) return `${API}/media/${item.id}/download`;
+  return mediaUrl(item.filename);
+}
+
 let clubChart, stateChart;
 let videoIndex = 0, posterIndex = 0;
 let videoTimer = null, posterTimer = null;
@@ -36,8 +45,8 @@ function renderOverview(s) {
     { label: 'Total Registrations', value: s.totalRegistrations },
     { label: 'Single Registrations', value: s.singleRegs },
     { label: 'Double Registrations', value: s.doubleRegs },
-    { label: 'Total Participants (Double = 2)', value: s.totalParticipants },
-    { label: 'Amount Collected', value: fmtMoney(s.totalCollected) }
+    { label: 'Congress Only Registrations', value: s.congressOnlyRegs || 0 },
+    { label: 'Total Participants (Double = 2)', value: s.totalParticipants }
   ];
   document.getElementById('statCards').innerHTML = cards.map((c) => `
     <div class="stat-card">
@@ -89,9 +98,8 @@ function renderClubComparison(rows) {
       <td>${r.members_count}</td>
       <td>${r.registrations}</td>
       <td>${r.participants != null ? r.participants : '-'}</td>
-      <td>${fmtMoney(r.collected)}</td>
     </tr>
-  `).join('') || '<tr><td colspan="6" class="empty">No club data yet</td></tr>';
+  `).join('') || '<tr><td colspan="5" class="empty">No club data yet</td></tr>';
 }
 
 function renderNationwide(rows) {
@@ -159,20 +167,80 @@ function setupLoop(containerId, items, kind) {
   }
 
   let idx = kind === 'video' ? videoIndex % items.length : posterIndex % items.length;
+  // Videos start muted so the browser allows autoplay; the mute/volume
+  // controls carry over as you move between items in the loop.
+  let muted = true;
+  let volume = 1;
 
   function render() {
     const item = items[idx];
+    const url = mediaUrl(item.filename);
+    const dlUrl = mediaDownloadUrl(item);
     const mediaTag = kind === 'video'
-      ? `<video src="${mediaUrl(item.filename)}" autoplay muted playsinline></video>`
-      : `<img src="${mediaUrl(item.filename)}" alt="${item.title || ''}" />`;
+      ? `<video src="${url}" autoplay muted playsinline></video>`
+      : `<img src="${url}" alt="${item.title || ''}" />`;
+
+    const controlsHtml = kind === 'video'
+      ? `
+        <div class="media-controls">
+          <button type="button" class="media-btn" data-act="prev" title="Previous video" aria-label="Previous video">⏮</button>
+          <button type="button" class="media-btn" data-act="playpause" title="Pause" aria-label="Play or pause">⏸</button>
+          <button type="button" class="media-btn" data-act="next" title="Next video" aria-label="Next video">⏭</button>
+          <button type="button" class="media-btn" data-act="mute" title="Unmute" aria-label="Mute or unmute">🔇</button>
+          <input class="media-volume" data-act="volume" type="range" min="0" max="1" step="0.05" value="${volume}" aria-label="Volume" />
+          <a class="media-btn media-download" data-act="download" href="${dlUrl}" download title="Download video" aria-label="Download video">⬇ Download</a>
+        </div>`
+      : `
+        <div class="media-controls poster-controls">
+          <button type="button" class="media-btn" data-act="prev" title="Previous poster" aria-label="Previous poster">⏮</button>
+          <button type="button" class="media-btn" data-act="next" title="Next poster" aria-label="Next poster">⏭</button>
+          <a class="media-btn media-download" data-act="download" href="${dlUrl}" download title="Download poster" aria-label="Download poster">⬇ Download</a>
+        </div>`;
+
     el.innerHTML = `
       ${mediaTag}
       <div class="media-caption">${item.title || ''}</div>
       <div class="media-dots">${items.map((_, i) => `<span class="${i === idx ? 'active' : ''}"></span>`).join('')}</div>
+      ${controlsHtml}
     `;
+
+    el.querySelector('[data-act="prev"]').addEventListener('click', goPrev);
+    el.querySelector('[data-act="next"]').addEventListener('click', goNext);
+
     if (kind === 'video') {
       const v = el.querySelector('video');
+      const playBtn = el.querySelector('[data-act="playpause"]');
+      const muteBtn = el.querySelector('[data-act="mute"]');
+      const volSlider = el.querySelector('[data-act="volume"]');
+
+      v.muted = muted;
+      v.volume = volume;
+      muteBtn.textContent = muted ? '🔇' : '🔊';
+      muteBtn.title = muted ? 'Unmute' : 'Mute';
+
       v.onended = advance;
+      v.onplay = () => { playBtn.textContent = '⏸'; playBtn.title = 'Pause'; };
+      v.onpause = () => { playBtn.textContent = '⏵'; playBtn.title = 'Play'; };
+
+      playBtn.addEventListener('click', () => {
+        if (v.paused) v.play(); else v.pause();
+      });
+      muteBtn.addEventListener('click', () => {
+        muted = !muted;
+        v.muted = muted;
+        muteBtn.textContent = muted ? '🔇' : '🔊';
+        muteBtn.title = muted ? 'Unmute' : 'Mute';
+      });
+      volSlider.addEventListener('input', (e) => {
+        volume = parseFloat(e.target.value);
+        v.volume = volume;
+        if (volume > 0 && muted) {
+          muted = false;
+          v.muted = false;
+          muteBtn.textContent = '🔊';
+          muteBtn.title = 'Mute';
+        }
+      });
     } else {
       posterTimer = setTimeout(advance, 6000);
     }
@@ -180,6 +248,18 @@ function setupLoop(containerId, items, kind) {
 
   function advance() {
     idx = (idx + 1) % items.length;
+    if (kind === 'video') videoIndex = idx; else posterIndex = idx;
+    render();
+  }
+
+  function goNext() {
+    if (kind === 'poster') clearTimeout(posterTimer);
+    advance();
+  }
+
+  function goPrev() {
+    if (kind === 'poster') clearTimeout(posterTimer);
+    idx = (idx - 1 + items.length) % items.length;
     if (kind === 'video') videoIndex = idx; else posterIndex = idx;
     render();
   }
@@ -240,7 +320,59 @@ async function refreshMedia() {
   }
 }
 
+// Renders the congress agenda from the admin-editable itinerary_items table
+// instead of the old hardcoded HTML — grouped into one card per day, in the
+// same order the admin panel's Itinerary tab lists them (sort_order, then id).
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+async function refreshItinerary() {
+  const grid = document.getElementById('itineraryGrid');
+  if (!grid) return;
+  let items = [];
+  try {
+    if (HAS_BACKEND) {
+      items = await jget(`${API}/itinerary`);
+    } else {
+      const data = await getStaticData();
+      items = data.itinerary || [];
+    }
+  } catch (e) {
+    console.error(e);
+    grid.innerHTML = '<div class="empty">Itinerary is not available right now.</div>';
+    return;
+  }
+  if (!items.length) {
+    grid.innerHTML = '<div class="empty">Itinerary coming soon.</div>';
+    return;
+  }
+  const days = [];
+  const dayIndex = {};
+  items.forEach((it) => {
+    if (!(it.day_label in dayIndex)) {
+      dayIndex[it.day_label] = days.length;
+      days.push({ label: it.day_label, items: [] });
+    }
+    days[dayIndex[it.day_label]].items.push(it);
+  });
+  grid.innerHTML = days.map((day) => `
+    <div class="card itin-day">
+      <div class="itin-day-label">${escapeHtml(day.label)}</div>
+      ${day.items.map((it) => `
+        <div class="feed-item">
+          <div class="time">${escapeHtml(it.time_label || '')}</div>
+          <div class="title">${escapeHtml(it.title)}</div>
+          ${it.description ? `<div class="desc">${escapeHtml(it.description)}</div>` : ''}
+        </div>
+      `).join('')}
+    </div>
+  `).join('');
+}
+
 refreshStats();
 refreshMedia();
+refreshItinerary();
 setInterval(refreshStats, 30000);
 setInterval(refreshMedia, 5 * 60000); // re-check for newly uploaded media every 5 min without disrupting playback
+setInterval(refreshItinerary, 5 * 60000);

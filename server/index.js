@@ -65,6 +65,18 @@ app.use('/api/host', require('./routes/host'));
 app.use('/api/vehicles', requireAuth, require('./routes/vehicles'));
 app.use('/api/transport', requireAuth, require('./routes/transport'));
 app.use('/api/pretours', requireAuth, require('./routes/pretours'));
+app.use('/api/hotels', requireAuth, require('./routes/hotels'));
+app.use('/api/rooms', requireAuth, require('./routes/rooms'));
+
+// --- Sponsors, Guest Speakers, Guest Visitors — each with their own ---
+// customizable checklist (benefits / what-must-reach-them / offerings). ---
+// /api/checklist-items is the single shared edit/delete-by-id endpoint used ---
+// by every owner type (sponsor, speaker, guest_visitor, participant, ---
+// host_member) — see server/routes/checklistHelper.js. ---
+app.use('/api/sponsors', requireAuth, require('./routes/sponsors'));
+app.use('/api/speakers', requireAuth, require('./routes/speakers'));
+app.use('/api/guestvisitors', requireAuth, require('./routes/guestvisitors'));
+app.use('/api/checklist-items', requireAuth, require('./routes/checklistHelper').buildChecklistItemsRouter());
 
 // --- Public reads (needed by the public dashboard), protected writes ---
 app.use('/api', (req, res, next) => {

@@ -14,5 +14,5 @@
 // site's exact Netlify URL so cross-site admin login works correctly.
 
 window.SINC_CONFIG = {
-  API_BASE_URL: ''
+  API_BASE_URL: 'https://sinc2026-backend.onrender.com/api'
 };

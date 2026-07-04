@@ -333,6 +333,104 @@ async function initSchema() {
       UNIQUE(pre_tour_id, participant_id),
       UNIQUE(pre_tour_id, host_member_id)
     );
+
+    -- --- Sponsors, Guest Speakers, Guest Visitors + a shared customizable ---
+    -- --- checklist system (deliberately generic: labels are free text, ---
+    -- --- added/edited/removed per-owner, since the exact benefit/task list ---
+    -- --- keeps growing — see checklist_items below). Sponsorship rates are ---
+    -- --- intentionally NOT modeled anywhere in this schema.               ---
+    CREATE TABLE IF NOT EXISTS sponsors (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      tier TEXT NOT NULL DEFAULT '',
+      contact_person TEXT,
+      phone TEXT,
+      email TEXT,
+      sponsor_pass_code TEXT UNIQUE,
+      guest_relation_host_member_id INTEGER REFERENCES host_members(id) ON DELETE SET NULL,
+      status TEXT NOT NULL DEFAULT 'confirmed' CHECK (status IN ('lead','confirmed','cancelled')),
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+
+    -- Guest / celebrity speaker register — what they'll speak on or moderate.
+    CREATE TABLE IF NOT EXISTS speakers (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      designation TEXT,
+      organization TEXT,
+      phone TEXT,
+      email TEXT,
+      topic TEXT,
+      session_type TEXT NOT NULL DEFAULT 'Speaker',
+      status TEXT NOT NULL DEFAULT 'invited' CHECK (status IN ('invited','confirmed','cancelled')),
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+
+    -- VIP / dignitary guest visitors (distinct from delegates, sponsors, and
+    -- speakers) — what we owe/offer each of them lives in checklist_items.
+    CREATE TABLE IF NOT EXISTS guest_visitors (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      designation TEXT,
+      organization TEXT,
+      phone TEXT,
+      email TEXT,
+      category TEXT,
+      visit_date DATE,
+      status TEXT NOT NULL DEFAULT 'invited' CHECK (status IN ('invited','confirmed','cancelled')),
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+
+    -- One generic, fully customizable checklist system shared by sponsors
+    -- (benefit checklist), speakers (what must reach them / be done for
+    -- them), guest visitors (offerings), and — for the goodies/kit handover
+    -- tracker — participants and host_members. owner_type+owner_id is a
+    -- lightweight polymorphic reference (no DB-level FK, since it spans
+    -- multiple tables); each route module deletes its own rows on owner
+    -- delete. Labels are free text so new checklist items can always be
+    -- added later without a schema change.
+    CREATE TABLE IF NOT EXISTS checklist_items (
+      id SERIAL PRIMARY KEY,
+      owner_type TEXT NOT NULL CHECK (owner_type IN ('sponsor','speaker','guest_visitor','participant','host_member')),
+      owner_id INTEGER NOT NULL,
+      category TEXT NOT NULL DEFAULT '',
+      label TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','in_progress','done')),
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS checklist_items_owner_idx ON checklist_items(owner_type, owner_id);
+
+    -- --- Accommodation: hotel master + per-person room assignment (delegates ---
+    -- --- and host members), so we know exactly who is in which room where.  ---
+    CREATE TABLE IF NOT EXISTS hotels (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      address TEXT,
+      contact_person TEXT,
+      phone TEXT,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS room_assignments (
+      id SERIAL PRIMARY KEY,
+      hotel_id INTEGER NOT NULL REFERENCES hotels(id) ON DELETE CASCADE,
+      room_number TEXT NOT NULL,
+      room_type TEXT,
+      participant_id INTEGER UNIQUE REFERENCES participants(id) ON DELETE CASCADE,
+      host_member_id INTEGER UNIQUE REFERENCES host_members(id) ON DELETE CASCADE,
+      check_in DATE,
+      check_out DATE,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      CHECK ((participant_id IS NOT NULL AND host_member_id IS NULL) OR (participant_id IS NULL AND host_member_id IS NOT NULL))
+    );
   `);
 
   // Safe to run repeatedly — links a 'users' login to a host_members profile
