@@ -126,7 +126,7 @@ async function loadMe() {
   }
   renderProfile(data.profile);
   renderPayment(data.profile);
-  renderCommittees(data.committees);
+  renderCommittees(data.committeeTasks || []);
   renderAssignments(data.assignments);
   renderTasks(data.tasks);
   renderSponsorRelations(data.sponsorRelations);
@@ -150,10 +150,29 @@ function renderPayment(p) {
 }
 
 function renderCommittees(committees) {
-  document.getElementById('myCommitteesBody').innerHTML = (committees || []).map((c) =>
-    `<span class="pill single" style="margin:0 6px 6px 0;display:inline-block;">${c.name}</span>`
-  ).join('') || '<p class="hint">You are not yet assigned to a committee.</p>';
+  document.getElementById('myCommitteesBody').innerHTML = (committees || []).map((c) => `
+    <div style="margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--line);">
+      <p style="margin:0 0 4px;"><strong>${c.name}</strong></p>
+      ${c.description ? `<p class="hint" style="margin:0 0 8px;white-space:pre-wrap;">${c.description}</p>` : ''}
+      ${(c.tasks && c.tasks.length) ? c.tasks.map((t) => `
+        <div class="checklist-row status-${t.my_status || 'pending'}">
+          <select onchange="updateMyCommitteeTaskStatus(${t.completion_id}, this.value)">
+            <option value="pending" ${t.my_status === 'pending' ? 'selected' : ''}>Pending</option>
+            <option value="done" ${t.my_status === 'done' ? 'selected' : ''}>Done</option>
+          </select>
+          <span class="checklist-label">
+            ${Number(t.is_milestone) ? '<span class="pill double" style="margin-right:4px;">Milestone</span>' : ''}${t.title}${t.due_date ? ' <span class="hint">(due ' + t.due_date + ')</span>' : ''}
+          </span>
+          <span class="hint">${t.done_count}/${t.total_members} members done</span>
+        </div>
+      `).join('') : '<p class="hint">No checklist items or milestones posted for this committee yet.</p>'}
+    </div>
+  `).join('') || '<p class="hint">You are not yet assigned to a committee.</p>';
 }
+window.updateMyCommitteeTaskStatus = async (completionId, status) => {
+  try { await jput(`${API}/host/committee-tasks/${completionId}`, { status }); toast('Status updated'); loadMe(); }
+  catch (err) { if (!(err instanceof UnauthorizedError)) toast(err.message); }
+};
 
 function renderAssignments(rows) {
   document.getElementById('myAssignmentsBody').innerHTML = (rows || []).map((a) => `

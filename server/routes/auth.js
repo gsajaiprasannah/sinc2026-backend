@@ -102,6 +102,45 @@ router.post('/users', requireSuperAdmin, async (req, res) => {
   }
 });
 
+// Bulk-create host-member logins in one click: username = their 10-digit
+// mobile number, password = a common default they can change after their
+// first login. Skips anyone with no/invalid phone on file or who already
+// has a login, and reports exactly why each one was skipped.
+router.post('/users/bulk-create-host-logins', requireSuperAdmin, async (req, res) => {
+  const DEFAULT_PASSWORD = 'pass123';
+  try {
+    const members = await db.all(`
+      SELECT hm.id, hm.name, hm.phone,
+        (SELECT u.id FROM users u WHERE u.host_member_id = hm.id LIMIT 1) AS existing_user_id
+      FROM host_members hm
+      ORDER BY hm.name
+    `);
+    const hash = await hashPassword(DEFAULT_PASSWORD);
+    const created = [];
+    const skipped = [];
+    for (const m of members) {
+      if (m.existing_user_id) { skipped.push({ name: m.name, reason: 'already has a login' }); continue; }
+      const digits = (m.phone || '').replace(/\D/g, '').slice(-10);
+      if (digits.length !== 10) { skipped.push({ name: m.name, reason: 'no valid 10-digit mobile number on file' }); continue; }
+      const existingUsername = await db.get('SELECT id FROM users WHERE username=$1', [digits]);
+      if (existingUsername) { skipped.push({ name: m.name, reason: `username ${digits} is already taken by another login` }); continue; }
+      try {
+        await db.run(
+          `INSERT INTO users (username, password_hash, role, status, approved_at, approved_by, host_member_id)
+           VALUES ($1,$2,'host_member','approved',NOW(),$3,$4)`,
+          [digits, hash, req.user.id, m.id]
+        );
+        created.push({ name: m.name, username: digits });
+      } catch (e) {
+        skipped.push({ name: m.name, reason: e.message });
+      }
+    }
+    res.json({ created, skipped, default_password: DEFAULT_PASSWORD });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.put('/users/:id/approve', requireSuperAdmin, async (req, res) => {
   await db.run(`UPDATE users SET status='approved', approved_at=NOW(), approved_by=$1 WHERE id=$2`, [req.user.id, req.params.id]);
   res.json({ ok: true });

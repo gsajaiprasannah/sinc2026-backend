@@ -165,7 +165,37 @@ async function initSchema() {
     CREATE TABLE IF NOT EXISTS committees (
       id SERIAL PRIMARY KEY,
       name TEXT NOT NULL UNIQUE,
-      sort_order INTEGER NOT NULL DEFAULT 0
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      description TEXT
+    );
+
+    -- A checklist item or milestone for a whole committee. Because a
+    -- committee has multiple members, "done" isn't a single flag on this row
+    -- — it's derived from committee_task_completions below, one row per
+    -- member, and the task only counts as accomplished once every member of
+    -- the committee has completed their own row.
+    CREATE TABLE IF NOT EXISTS committee_tasks (
+      id SERIAL PRIMARY KEY,
+      committee_id INTEGER NOT NULL REFERENCES committees(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      description TEXT,
+      is_milestone INTEGER NOT NULL DEFAULT 0,
+      due_date DATE,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
+
+    -- Per-member completion of a committee task — seeded for every current
+    -- committee member when the task is created (and for every existing task
+    -- when a new member joins), so admins can see exactly who has and hasn't
+    -- completed it.
+    CREATE TABLE IF NOT EXISTS committee_task_completions (
+      id SERIAL PRIMARY KEY,
+      committee_task_id INTEGER NOT NULL REFERENCES committee_tasks(id) ON DELETE CASCADE,
+      host_member_id INTEGER NOT NULL REFERENCES host_members(id) ON DELETE CASCADE,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','done')),
+      completed_at TIMESTAMP,
+      UNIQUE(committee_task_id, host_member_id)
     );
 
     CREATE TABLE IF NOT EXISTS committee_members (
@@ -507,6 +537,11 @@ async function initSchema() {
       END IF;
     END $$;
   `);
+
+  // Older databases created before "roles & responsibilities" was added to
+  // committees need the column backfilled (Postgres CREATE TABLE IF NOT
+  // EXISTS above is a no-op once the table already exists).
+  await pool.query(`ALTER TABLE committees ADD COLUMN IF NOT EXISTS description TEXT;`);
 }
 
 module.exports = { pool, all, get, run, transaction, initSchema };

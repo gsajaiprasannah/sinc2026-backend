@@ -776,9 +776,11 @@ async function refreshCommittees() {
         <strong>${c.name}</strong>
         <div>
           <button class="btn small" onclick="editCommittee(${c.id})">Edit</button>
+          <button class="btn small" onclick="toggleCommitteeTasks(${c.id})">Checklist &amp; Milestones (${c.tasks_completed || 0}/${c.task_count || 0})</button>
           ${canDelete() ? `<button class="btn danger small" onclick="deleteCommittee(${c.id})">Delete</button>` : ''}
         </div>
       </div>
+      ${c.description ? `<p class="hint" style="margin:6px 0 0;white-space:pre-wrap;">${c.description}</p>` : ''}
       <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px;">
         ${(c.members || []).map((m) => `
           <span class="pill single" style="display:inline-flex;align-items:center;gap:6px;">
@@ -786,12 +788,107 @@ async function refreshCommittees() {
           </span>
         `).join('') || '<span class="hint">No members assigned yet</span>'}
       </div>
+      <div id="committeeTasksPanel-${c.id}" style="display:none;margin-top:12px;border-top:1px solid var(--line);padding-top:12px;"></div>
     </div>
   `).join('') || '<div class="empty">No committees yet</div>';
 
   const opts = rows.map((c) => `<option value="${c.id}">${c.name}</option>`).join('');
   document.getElementById('committeeSelect').innerHTML = opts;
+
+  // Re-render innerHTML wipes any open checklist/milestones panels — reopen
+  // whichever ones were open before this refresh so admin actions inside
+  // them (add/delete/toggle) don't visibly close the panel each time.
+  for (const id of openCommitteeTaskPanels) {
+    const panel = document.getElementById(`committeeTasksPanel-${id}`);
+    if (panel) { panel.style.display = ''; renderCommitteeTasksPanel(id); }
+  }
 }
+let openCommitteeTaskPanels = new Set();
+
+window.toggleCommitteeTasks = async (committeeId) => {
+  const panel = document.getElementById(`committeeTasksPanel-${committeeId}`);
+  if (!panel) return;
+  const isOpen = panel.style.display !== 'none';
+  if (isOpen) {
+    panel.style.display = 'none';
+    openCommitteeTaskPanels.delete(committeeId);
+  } else {
+    panel.style.display = '';
+    openCommitteeTaskPanels.add(committeeId);
+    await renderCommitteeTasksPanel(committeeId);
+  }
+};
+
+async function renderCommitteeTasksPanel(committeeId) {
+  const panel = document.getElementById(`committeeTasksPanel-${committeeId}`);
+  if (!panel) return;
+  const tasks = await jget(`${API}/committees/${committeeId}/tasks`);
+  panel.innerHTML = `
+    <form onsubmit="return submitCommitteeTask(event, ${committeeId})" style="margin-bottom:10px;">
+      <div class="form-grid cols-3">
+        <div class="field"><label>Title *</label><input name="title" required /></div>
+        <div class="field"><label>Due date</label><input name="due_date" type="date" /></div>
+        <div class="field"><label>Type</label>
+          <select name="is_milestone"><option value="0">Checklist item</option><option value="1">Milestone</option></select>
+        </div>
+      </div>
+      <div class="field"><label>Description</label><textarea name="description"></textarea></div>
+      <button class="btn gold small" type="submit">Add checklist item / milestone</button>
+    </form>
+    ${tasks.map((t) => {
+      const total = Number(t.total_members) || 0;
+      const done = Number(t.done_count) || 0;
+      const allDone = total > 0 && done === total;
+      return `
+        <div style="padding:8px 0;border-bottom:1px solid var(--line);">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+            <div>
+              ${Number(t.is_milestone) ? '<span class="pill double">Milestone</span> ' : ''}
+              <strong>${t.title}</strong>
+              ${t.due_date ? ` <span class="hint">due ${t.due_date}</span>` : ''}
+              ${t.description ? `<br><span class="hint">${t.description}</span>` : ''}
+            </div>
+            <div style="text-align:right;white-space:nowrap;">
+              <span class="pill ${allDone ? 'done' : 'in_progress'}">${done}/${total} done</span>
+              ${canDelete() ? `<button class="btn danger small" onclick="deleteCommitteeTask(${t.id}, ${committeeId})">Delete</button>` : ''}
+            </div>
+          </div>
+          <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;">
+            ${(t.members || []).map((m) => `
+              <span class="pill ${m.status === 'done' ? 'done' : 'not_started'}" style="cursor:pointer;" title="Click to toggle" onclick="toggleCommitteeMemberCompletion(${m.completion_id}, '${m.status}', ${committeeId})">
+                ${m.name} ${m.status === 'done' ? '✓' : ''}
+              </span>
+            `).join('')}
+          </div>
+        </div>
+      `;
+    }).join('') || '<p class="hint">No checklist items or milestones yet.</p>'}
+  `;
+}
+window.submitCommitteeTask = async (e, committeeId) => {
+  e.preventDefault();
+  const body = Object.fromEntries(new FormData(e.target).entries());
+  try {
+    await jpost(`${API}/committees/${committeeId}/tasks`, body);
+    e.target.reset();
+    toast('Checklist item added');
+    openCommitteeTaskPanels.add(committeeId);
+    refreshCommittees();
+  } catch (err) { toast(err.message); }
+  return false;
+};
+window.deleteCommitteeTask = async (taskId, committeeId) => {
+  await jdel(`${API}/committees/tasks/${taskId}`);
+  toast('Removed');
+  refreshCommittees();
+};
+window.toggleCommitteeMemberCompletion = async (completionId, currentStatus, committeeId) => {
+  const next = currentStatus === 'done' ? 'pending' : 'done';
+  try {
+    await jput(`${API}/committees/tasks/completions/${completionId}`, { status: next });
+    refreshCommittees();
+  } catch (err) { toast(err.message); }
+};
 window.removeCommitteeMember = async (committeeId, hostMemberId) => {
   await jdel(`${API}/committees/${committeeId}/members/${hostMemberId}`);
   toast('Removed from committee');
@@ -811,6 +908,7 @@ window.editCommittee = (id) => {
   const form = document.getElementById('committeeForm');
   form.elements.name.value = c.name;
   form.elements.sort_order.value = c.sort_order;
+  form.elements.description.value = c.description || '';
   form.dataset.editId = id;
   document.getElementById('committeeFormTitle').textContent = `Edit committee — ${c.name}`;
   document.getElementById('committeeSubmitBtn').textContent = 'Update Committee';
@@ -1898,6 +1996,34 @@ document.getElementById('seedHostDataBtn').addEventListener('click', async () =>
   } finally {
     btn.disabled = false;
     btn.textContent = 'Import Host Members & Committees Now';
+  }
+});
+
+document.getElementById('bulkCreateLoginsBtn').addEventListener('click', async () => {
+  if (!confirm('Create a login for every host member with a mobile number on file, using that number as username and "pass123" as password? Members who already have a login are skipped.')) return;
+  const btn = document.getElementById('bulkCreateLoginsBtn');
+  const out = document.getElementById('bulkCreateLoginsResult');
+  btn.disabled = true;
+  btn.textContent = 'Creating logins...';
+  out.textContent = '';
+  try {
+    const summary = await jpost(`${API}/auth/users/bulk-create-host-logins`, {});
+    const lines = [`Created ${summary.created.length} login(s) with password "${summary.default_password}":`];
+    summary.created.forEach((c) => lines.push(`  • ${c.name} — username ${c.username}`));
+    if (summary.skipped.length) {
+      lines.push(`\nSkipped ${summary.skipped.length}:`);
+      summary.skipped.forEach((s) => lines.push(`  • ${s.name} — ${s.reason}`));
+    }
+    out.textContent = lines.join('\n');
+    toast(`${summary.created.length} login(s) created`);
+    refreshHostMembers();
+    refreshUsersAdmin();
+  } catch (err) {
+    out.textContent = 'Failed: ' + err.message;
+    toast(err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Create Logins for All Host Members';
   }
 });
 

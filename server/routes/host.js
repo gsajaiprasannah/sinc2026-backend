@@ -38,6 +38,36 @@ router.get('/me', requireHostMember, async (req, res) => {
       WHERE cm.host_member_id = $1
       ORDER BY c.sort_order, c.name
     `, [id]);
+    // Each committee's roles/responsibilities + checklist/milestones, with
+    // this host member's own completion status plus the whole committee's
+    // progress (a task only counts as accomplished once every member's done).
+    const committeeTaskRows = await db.all(`
+      SELECT c.id AS committee_id, c.name AS committee_name, c.description AS committee_description,
+        ct.id AS task_id, ct.title, ct.description AS task_description, ct.is_milestone, ct.due_date,
+        tc.id AS completion_id, tc.status AS my_status,
+        (SELECT COUNT(*) FROM committee_task_completions x WHERE x.committee_task_id = ct.id) AS total_members,
+        (SELECT COUNT(*) FROM committee_task_completions x WHERE x.committee_task_id = ct.id AND x.status = 'done') AS done_count
+      FROM committee_members cm
+      JOIN committees c ON c.id = cm.committee_id
+      LEFT JOIN committee_tasks ct ON ct.committee_id = c.id
+      LEFT JOIN committee_task_completions tc ON tc.committee_task_id = ct.id AND tc.host_member_id = $1
+      WHERE cm.host_member_id = $1
+      ORDER BY c.sort_order, c.name, ct.is_milestone DESC, ct.due_date NULLS LAST, ct.created_at
+    `, [id]);
+    const committeeTaskMap = new Map();
+    for (const row of committeeTaskRows) {
+      if (!committeeTaskMap.has(row.committee_id)) {
+        committeeTaskMap.set(row.committee_id, { id: row.committee_id, name: row.committee_name, description: row.committee_description, tasks: [] });
+      }
+      if (row.task_id) {
+        committeeTaskMap.get(row.committee_id).tasks.push({
+          id: row.task_id, title: row.title, description: row.task_description, is_milestone: row.is_milestone,
+          due_date: row.due_date, completion_id: row.completion_id, my_status: row.my_status,
+          total_members: Number(row.total_members), done_count: Number(row.done_count)
+        });
+      }
+    }
+    const committeeTasks = Array.from(committeeTaskMap.values());
     const assignments = await db.all(`
       SELECT da.id, da.role, da.status, da.notes, da.updated_at,
         p.id AS participant_id, p.name AS participant_name, p.participant_code,
@@ -74,7 +104,7 @@ router.get('/me', requireHostMember, async (req, res) => {
       `SELECT * FROM checklist_items WHERE owner_type='host_member' AND owner_id=$1 ORDER BY sort_order, id`,
       [id]
     );
-    res.json({ profile, committees, assignments, tasks, sponsorRelations, goodiesChecklist });
+    res.json({ profile, committees, committeeTasks, assignments, tasks, sponsorRelations, goodiesChecklist });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -125,6 +155,28 @@ router.put('/checklist/:id', requireHostMember, async (req, res) => {
     await db.run(
       'UPDATE checklist_items SET status=COALESCE($1,status), notes=COALESCE($2,notes), updated_at=NOW() WHERE id=$3',
       [status || null, notes !== undefined ? notes : null, req.params.id]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// A committee member marking their own completion of a checklist item /
+// milestone — ownership is enforced (host_member_id must match) so nobody
+// can mark another member's row done on their behalf.
+router.put('/committee-tasks/:completionId', requireHostMember, async (req, res) => {
+  try {
+    const owned = await db.get(
+      'SELECT id FROM committee_task_completions WHERE id=$1 AND host_member_id=$2',
+      [req.params.completionId, req.hostMemberId]
+    );
+    if (!owned) return res.status(404).json({ error: 'Checklist item not found.' });
+    const { status } = req.body;
+    if (!['pending', 'done'].includes(status)) return res.status(400).json({ error: 'status must be pending or done' });
+    await db.run(
+      `UPDATE committee_task_completions SET status=$1, completed_at=CASE WHEN $1='done' THEN NOW() ELSE NULL END WHERE id=$2`,
+      [status, req.params.completionId]
     );
     res.json({ ok: true });
   } catch (e) {

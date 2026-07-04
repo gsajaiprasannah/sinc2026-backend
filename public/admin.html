@@ -425,6 +425,7 @@
           <div class="field"><label>Committee name *</label><input name="name" required /></div>
           <div class="field"><label>Sort order</label><input name="sort_order" type="number" value="0" /></div>
         </div>
+        <div class="field"><label>Roles &amp; responsibilities</label><textarea name="description" placeholder="What this committee owns and is responsible for..."></textarea></div>
         <button class="btn gold" type="submit" id="committeeSubmitBtn">Save Committee</button>
         <button type="button" class="btn outline" id="committeeCancelEditBtn" style="display:none;">Cancel edit</button>
       </form>
@@ -988,6 +989,13 @@
       <p class="hint" style="margin-top:0;">Loads host members, their committee assignments, and payment status from the SINC2026 "Host members Record Sheet" Excel file — and seeds the congress itinerary if it's empty. Safe to run again after the sheet is updated: existing host members are matched by phone number and updated rather than duplicated.</p>
       <button class="btn gold" type="button" id="seedHostDataBtn">Import Host Members &amp; Committees Now</button>
       <div id="seedHostDataResult" class="hint" style="margin-top:10px;"></div>
+    </div>
+
+    <div class="section-title">Bulk-create host member logins</div>
+    <div class="card">
+      <p class="hint" style="margin-top:0;">Creates a login for every host member who doesn't have one yet, using their 10-digit mobile number as the username and <code>pass123</code> as a common temporary password. They can change it after logging in from the "Change password" section on their portal. Members with no valid mobile number on file are skipped.</p>
+      <button class="btn gold" type="button" id="bulkCreateLoginsBtn">Create Logins for All Host Members</button>
+      <div id="bulkCreateLoginsResult" class="hint" style="margin-top:10px;white-space:pre-wrap;"></div>
     </div>
 
     <div class="section-title">Pending signup requests</div>
