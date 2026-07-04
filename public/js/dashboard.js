@@ -46,7 +46,7 @@ function renderOverview(s) {
     { label: 'Single Registrations', value: s.singleRegs },
     { label: 'Double Registrations', value: s.doubleRegs },
     { label: 'Congress Only Registrations', value: s.congressOnlyRegs || 0 },
-    { label: 'Total Participants (Double = 2)', value: s.totalParticipants }
+    { label: 'Total Delegates (Double = 2)', value: s.totalParticipants }
   ];
   document.getElementById('statCards').innerHTML = cards.map((c) => `
     <div class="stat-card">

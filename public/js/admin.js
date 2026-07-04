@@ -367,9 +367,9 @@ async function refreshParts(query) {
         ${canDelete() ? `<button class="btn danger small" onclick="deletePart(${p.id})">Delete</button>` : ''}
       </td>
     </tr>
-  `).join('') || '<tr><td colspan="10" class="empty">No participants yet</td></tr>';
+  `).join('') || '<tr><td colspan="10" class="empty">No delegates yet</td></tr>';
 }
-window.deletePart = async (id) => { await jdel(`${API}/participants/${id}`); toast('Participant deleted'); refreshParts(); };
+window.deletePart = async (id) => { await jdel(`${API}/participants/${id}`); toast('Delegate deleted'); refreshParts(); };
 
 const PART_FORM_FIELDS = [
   'name', 'phone', 'whatsapp', 'email', 'address', 'club_id', 'registration_id', 'designation', 'is_primary',
@@ -378,7 +378,7 @@ const PART_FORM_FIELDS = [
   'pickup_by', 'pickup_vehicle', 'pickup_phone', 'spoc_name', 'spoc_phone', 'notes'
 ];
 
-// Loads an existing participant into the Add Participant form and switches
+// Loads an existing delegate into the Add Delegate form and switches
 // it into "update" mode (tracked via form.dataset.editId) so the same form
 // is used for both creating and editing — no separate edit screen needed.
 window.editPart = async (id) => {
@@ -399,8 +399,8 @@ window.editPart = async (id) => {
     form.elements.spoc_host_member_id.value = p.spoc_host_member_id || '';
   }
   form.dataset.editId = id;
-  document.getElementById('partFormTitle').textContent = `Edit participant — ${p.participant_code || p.name}`;
-  document.getElementById('partSubmitBtn').textContent = 'Update Participant';
+  document.getElementById('partFormTitle').textContent = `Edit delegate — ${p.participant_code || p.name}`;
+  document.getElementById('partSubmitBtn').textContent = 'Update Delegate';
   document.getElementById('partCancelEditBtn').style.display = '';
   form.scrollIntoView({ behavior: 'smooth', block: 'start' });
 };
@@ -409,8 +409,8 @@ window.cancelEditPart = () => {
   const form = document.getElementById('partForm');
   form.reset();
   delete form.dataset.editId;
-  document.getElementById('partFormTitle').textContent = 'Add participant';
-  document.getElementById('partSubmitBtn').textContent = 'Save Participant';
+  document.getElementById('partFormTitle').textContent = 'Add delegate';
+  document.getElementById('partSubmitBtn').textContent = 'Save Delegate';
   document.getElementById('partCancelEditBtn').style.display = 'none';
 };
 
@@ -434,17 +434,17 @@ async function savePartForm(form, force) {
     let participantId = editId;
     if (editId) {
       await jput(`${API}/participants/${editId}`, body);
-      toast('Participant updated');
+      toast('Delegate updated');
     } else {
       const res = await jpost(`${API}/participants`, body);
       participantId = res.id;
-      toast(`Participant saved${res.participant_code ? ' — Registration ID ' + res.participant_code : ''}`);
+      toast(`Delegate saved${res.participant_code ? ' — Registration ID ' + res.participant_code : ''}`);
     }
     if (participantId) {
       try {
         await jput(`${API}/assignments/spoc/${participantId}`, { host_member_id: spocHostMemberId || null });
       } catch (spocErr) {
-        toast('Participant saved, but SPOC link failed: ' + spocErr.message);
+        toast('Delegate saved, but SPOC link failed: ' + spocErr.message);
       }
     }
     if (editId) window.cancelEditPart();
@@ -474,7 +474,7 @@ document.getElementById('partCsvForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   try {
     const res = await uploadFile(`${API}/participants/bulk-upload`, e.target);
-    let msg = `Imported ${res.imported} participants`;
+    let msg = `Imported ${res.imported} delegates`;
     if (res.skipped) msg += `, skipped ${res.skipped} likely duplicates`;
     toast(msg);
     e.target.reset();

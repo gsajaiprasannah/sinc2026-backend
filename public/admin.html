@@ -67,7 +67,7 @@
           <div class="admin-nav">
             <button data-tab="clubs" class="active">Clubs &amp; Members</button>
             <button data-tab="registrations">Registrations &amp; Payments</button>
-            <button data-tab="participants">Participants</button>
+            <button data-tab="participants">Delegates</button>
             <button data-tab="media">Media (Video/Poster)</button>
             <button data-tab="happenings">Happenings</button>
             <button data-tab="itinerary">Itinerary</button>
@@ -201,10 +201,10 @@
     </div>
   </section>
 
-  <!-- PARTICIPANTS TAB -->
+  <!-- DELEGATES TAB (backend resource is still "participants") -->
   <section class="tab-panel" id="tab-participants">
     <div class="card">
-      <div class="section-title" style="margin-top:0" id="partFormTitle">Add participant</div>
+      <div class="section-title" style="margin-top:0" id="partFormTitle">Add delegate</div>
       <form id="partForm">
         <div class="form-grid cols-3">
           <div class="field"><label>Full name *</label><input name="name" required /></div>
@@ -254,7 +254,7 @@
         </div>
         <div class="field"><label>Notes</label><textarea name="notes"></textarea></div>
 
-        <button class="btn gold" type="submit" id="partSubmitBtn">Save Participant</button>
+        <button class="btn gold" type="submit" id="partSubmitBtn">Save Delegate</button>
         <button type="button" class="btn outline" id="partCancelEditBtn" style="display:none;">Cancel edit</button>
       </form>
     </div>
@@ -268,7 +268,7 @@
       </form>
     </div>
 
-    <div class="section-title">All participants</div>
+    <div class="section-title">All delegates</div>
     <div class="field"><input id="partSearch" placeholder="Search by name, phone, reg#, or club..." /></div>
     <div class="card table-scroll">
       <table>
@@ -452,7 +452,7 @@
       <form id="assignForm">
         <div class="form-grid cols-3">
           <div class="field"><label>Host member *</label><select name="host_member_id" id="assignHmSelect" required></select></div>
-          <div class="field"><label>Delegate (participant) *</label><select name="participant_id" id="assignPartSelect" required></select></div>
+          <div class="field"><label>Delegate *</label><select name="participant_id" id="assignPartSelect" required></select></div>
           <div class="field"><label>Role</label><input name="role" placeholder="pickup / accommodation / general assistance" value="assistance" /></div>
         </div>
         <div class="field"><label>Notes</label><textarea name="notes"></textarea></div>
@@ -1107,7 +1107,7 @@
 
 <!-- Shared, reusable customizable-checklist modal — used by Sponsors (benefit
      checklist), Guest Speakers (checklist), Guest Visitors (offerings), and
-     the goodies/kit handover checklist on Participants + Host Members. Items
+     the goodies/kit handover checklist on Delegates + Host Members. Items
      are free-text so new ones can always be added later. -->
 <div class="modal-overlay" id="checklistModal" style="display:none;" onclick="if(event.target===this) closeChecklistModal()">
   <div class="modal-card">
