@@ -438,6 +438,23 @@ async function initSchema() {
     );
     CREATE INDEX IF NOT EXISTS checklist_items_owner_idx ON checklist_items(owner_type, owner_id);
 
+    -- --- Master checklist templates: the predefined set of checklist items ---
+    -- --- that SHOULD be completed for each category (Delegates, Host        ---
+    -- --- Members, Sponsors, Guest Speakers, Guest Visitors). Managed from    ---
+    -- --- the Checklists & Milestones admin tab. These are just the master    ---
+    -- --- "menu" of suggestions — they get copied into an individual's own   ---
+    -- --- checklist_items row (above) when quick-added, so editing/deleting  ---
+    -- --- a template afterwards never touches checklists already handed out. ---
+    CREATE TABLE IF NOT EXISTS checklist_templates (
+      id SERIAL PRIMARY KEY,
+      owner_type TEXT NOT NULL CHECK (owner_type IN ('sponsor','speaker','guest_visitor','participant','host_member')),
+      category TEXT NOT NULL DEFAULT '',
+      label TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS checklist_templates_owner_idx ON checklist_templates(owner_type);
+
     -- --- Accommodation: hotel master + per-person room assignment (delegates ---
     -- --- and host members), so we know exactly who is in which room where.  ---
     CREATE TABLE IF NOT EXISTS hotels (
@@ -550,6 +567,45 @@ async function initSchema() {
   // these tables were created before this column existed.
   await pool.query(`ALTER TABLE speakers ADD COLUMN IF NOT EXISTS guest_relation_host_member_id INTEGER REFERENCES host_members(id) ON DELETE SET NULL;`);
   await pool.query(`ALTER TABLE guest_visitors ADD COLUMN IF NOT EXISTS guest_relation_host_member_id INTEGER REFERENCES host_members(id) ON DELETE SET NULL;`);
+
+  // One-time seed of the master checklist templates — only runs while the
+  // table is still empty, so it never overwrites anything an admin has since
+  // added, edited, or deleted from the Checklists & Milestones tab. These
+  // are just a sensible starting point per category.
+  const templateCount = await pool.query(`SELECT COUNT(*)::int AS n FROM checklist_templates`);
+  if (templateCount.rows[0].n === 0) {
+    const DEFAULT_TEMPLATES = {
+      sponsor: [
+        'Sponsor Branding on Main LED Screen', 'Branding in LED at Hall Entrance', 'Branding in Main Arch',
+        'Advertisement in Program Booklet', 'Advertisement/Hoardings at Event Evening', 'Banner Inside Dining Area',
+        'Banner Near Hall Entrance', 'Bunting on Driveway', 'Certificate with SKAL India Recognition',
+        'Advertisement in Newspaper', 'Complimentary Exhibition Stall (6x6 ft)', 'Cinema Hall Advertisement',
+        'Standees at Mall', 'Airport Advertisement', 'FM & Radio Promotion', 'Social Media Promotion',
+        'YouTube Campaign', 'Instagram Promotion', 'Google/Meta Ads', 'Bus Back Ads', 'Road Show',
+        'Auto Advertisement', 'T-Shirt Branding', 'Event Passes Issued', 'Complimentary Room'
+      ],
+      speaker: [
+        'Formal Invitation Letter Sent', 'Travel Tickets Booked', 'Hotel Booking Confirmed', 'Session Briefing Note Shared',
+        'Airport Pickup Arranged', 'Green Room Arranged', 'Presentation/AV Received', 'Bio & Photo for Program Booklet',
+        'Honorarium/Reimbursement Processed', 'Thank-you Note & Certificate Sent'
+      ],
+      guest_visitor: [
+        'Invitation Sent', 'Welcome Kit Prepared', 'Reserved Seating Arranged', 'Photo-op Arranged',
+        'Escort/Host Assigned', 'Memento/Certificate Prepared'
+      ],
+      participant: ['Congress Kit / Delegate Bag', 'ID Badge', 'Souvenir', 'Welcome Letter', 'Gala Dinner Pass'],
+      host_member: ['Host Committee T-Shirt/Uniform', 'ID Badge', 'Souvenir', 'Volunteer Kit']
+    };
+    for (const [ownerType, labels] of Object.entries(DEFAULT_TEMPLATES)) {
+      for (let i = 0; i < labels.length; i++) {
+        await pool.query(
+          `INSERT INTO checklist_templates (owner_type, category, label, sort_order) VALUES ($1,'',$2,$3)`,
+          [ownerType, labels[i], i]
+        );
+      }
+    }
+    console.log('Seeded default master checklist templates (Sponsors, Speakers, Guest Visitors, Delegates, Host Members).');
+  }
 }
 
 module.exports = { pool, all, get, run, transaction, initSchema };

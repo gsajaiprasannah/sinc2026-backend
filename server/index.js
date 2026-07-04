@@ -77,6 +77,9 @@ app.use('/api/sponsors', requireAuth, require('./routes/sponsors'));
 app.use('/api/speakers', requireAuth, require('./routes/speakers'));
 app.use('/api/guestvisitors', requireAuth, require('./routes/guestvisitors'));
 app.use('/api/checklist-items', requireAuth, require('./routes/checklistHelper').buildChecklistItemsRouter());
+// Master checklist templates (per category) — managed from the Checklists &
+// Milestones admin tab; this is what "quick add" suggestions are drawn from.
+app.use('/api/checklist-templates', requireAuth, require('./routes/checklistTemplates'));
 
 // --- Public reads (needed by the public dashboard), protected writes ---
 app.use('/api', (req, res, next) => {

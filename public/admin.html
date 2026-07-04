@@ -495,6 +495,44 @@
         <tbody id="taskTableBody"></tbody>
       </table>
     </div>
+
+    <div class="section-title">Master checklist templates (by category)</div>
+    <div class="card">
+      <p class="hint" style="margin-top:0;">Define the standard checklist items that should be completed for each category. These become the "quick add" suggestions everywhere that category's checklist appears — every Sponsor's benefit checklist, every Speaker's checklist, every delegate's/host member's kit checklist, and so on.</p>
+      <form id="checklistTemplateForm">
+        <div class="form-grid cols-3">
+          <div class="field"><label>Category *</label>
+            <select name="owner_type" id="checklistTemplateTypeSelect" required>
+              <option value="participant">Delegates</option>
+              <option value="host_member">Host Members</option>
+              <option value="sponsor">Sponsors</option>
+              <option value="speaker">Guest Speakers</option>
+              <option value="guest_visitor">Guest Visitors</option>
+            </select>
+          </div>
+          <div class="field"><label>Sub-category (optional)</label><input name="category" placeholder="e.g. Benefit, Logistics" /></div>
+          <div class="field"><label>Sort order</label><input name="sort_order" type="number" value="0" /></div>
+        </div>
+        <div class="field"><label>Checklist item label *</label><input name="label" required /></div>
+        <button class="btn gold" type="submit" id="checklistTemplateSubmitBtn">Add template item</button>
+        <button type="button" class="btn outline" id="checklistTemplateCancelEditBtn" style="display:none;">Cancel edit</button>
+      </form>
+    </div>
+    <div class="card table-scroll">
+      <div class="field" style="max-width:280px;"><label>Viewing category</label>
+        <select id="checklistTemplateFilterSelect">
+          <option value="participant">Delegates</option>
+          <option value="host_member">Host Members</option>
+          <option value="sponsor">Sponsors</option>
+          <option value="speaker">Guest Speakers</option>
+          <option value="guest_visitor">Guest Visitors</option>
+        </select>
+      </div>
+      <table>
+        <thead><tr><th>Sub-category</th><th>Checklist item</th><th>Sort</th><th></th></tr></thead>
+        <tbody id="checklistTemplateTableBody"></tbody>
+      </table>
+    </div>
   </section>
 
   <!-- PARTNERS & DRIVERS (MASTERS) TAB -->

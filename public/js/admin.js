@@ -1559,31 +1559,17 @@ document.getElementById('tourTripForm').addEventListener('submit', async (e) => 
 // --- Shared, reusable customizable checklist modal ---
 // Used by Sponsors (benefit checklist), Guest Speakers (checklist), Guest
 // Visitors (offerings), and the goodies/kit handover checklist on
-// Participants + Host Members. Suggested labels are just a starting point —
-// admins can add/edit/remove anything, since the exact list keeps growing.
+// Participants + Host Members. Quick-add suggestions are drawn live from the
+// master checklist templates (managed on the Checklists & Milestones tab —
+// see refreshChecklistTemplates() below), not hardcoded here.
 const CHECKLIST_BASE = { sponsor: 'sponsors', speaker: 'speakers', guest_visitor: 'guestvisitors', participant: 'participants', host_member: 'hostmembers' };
-const CHECKLIST_TEMPLATES = {
-  sponsor: [
-    'Sponsor Branding on Main LED Screen', 'Branding in LED at Hall Entrance', 'Branding in Main Arch',
-    'Advertisement in Program Booklet', 'Advertisement/Hoardings at Event Evening', 'Banner Inside Dining Area',
-    'Banner Near Hall Entrance', 'Bunting on Driveway', 'Certificate with SKAL India Recognition',
-    'Advertisement in Newspaper', 'Complimentary Exhibition Stall (6x6 ft)', 'Cinema Hall Advertisement',
-    'Standees at Mall', 'Airport Advertisement', 'FM & Radio Promotion', 'Social Media Promotion',
-    'YouTube Campaign', 'Instagram Promotion', 'Google/Meta Ads', 'Bus Back Ads', 'Road Show',
-    'Auto Advertisement', 'T-Shirt Branding', 'Event Passes Issued', 'Complimentary Room'
-  ],
-  speaker: [
-    'Formal Invitation Letter Sent', 'Travel Tickets Booked', 'Hotel Booking Confirmed', 'Session Briefing Note Shared',
-    'Airport Pickup Arranged', 'Green Room Arranged', 'Presentation/AV Received', 'Bio & Photo for Program Booklet',
-    'Honorarium/Reimbursement Processed', 'Thank-you Note & Certificate Sent'
-  ],
-  guest_visitor: [
-    'Invitation Sent', 'Welcome Kit Prepared', 'Reserved Seating Arranged', 'Photo-op Arranged',
-    'Escort/Host Assigned', 'Memento/Certificate Prepared'
-  ],
-  participant: ['Congress Kit / Delegate Bag', 'ID Badge', 'Souvenir', 'Welcome Letter', 'Gala Dinner Pass'],
-  host_member: ['Host Committee T-Shirt/Uniform', 'ID Badge', 'Souvenir', 'Volunteer Kit']
-};
+
+async function fetchChecklistTemplateLabels(ownerType) {
+  try {
+    const rows = await jget(`${API}/checklist-templates?owner_type=${encodeURIComponent(ownerType)}`);
+    return rows.map((r) => r.label);
+  } catch (e) { return []; }
+}
 
 let checklistCtx = { ownerType: null, ownerId: null };
 
@@ -1621,7 +1607,7 @@ async function renderChecklistBody() {
     </div>
   `).join('') || '<p class="empty">No checklist items yet — add one below.</p>';
 
-  const templates = CHECKLIST_TEMPLATES[ownerType] || [];
+  const templates = await fetchChecklistTemplateLabels(ownerType);
   const existingLabels = new Set(items.map((it) => it.label));
   const suggestions = templates.filter((t) => !existingLabels.has(t));
 
@@ -1678,11 +1664,88 @@ window.quickAddChecklistItem = async (label) => {
 window.quickAddAllChecklistItems = async () => {
   const { ownerType, ownerId } = checklistCtx;
   const base = CHECKLIST_BASE[ownerType];
-  const templates = CHECKLIST_TEMPLATES[ownerType] || [];
   try {
+    const templates = await fetchChecklistTemplateLabels(ownerType);
+    if (!templates.length) { toast('No master checklist template items defined for this category yet — add some from Checklists & Milestones.'); return; }
     await jpost(`${API}/${base}/${ownerId}/checklist/bulk`, { items: templates.map((label) => ({ label })) });
     await renderChecklistBody();
     refreshOwnerListForChecklist();
+  } catch (err) { toast(err.message); }
+};
+
+// --- Master checklist templates (per category) ---
+async function refreshChecklistTemplates() {
+  const filterSel = document.getElementById('checklistTemplateFilterSelect');
+  if (!filterSel) return;
+  const ownerType = filterSel.value || 'sponsor';
+  const rows = await jget(`${API}/checklist-templates?owner_type=${encodeURIComponent(ownerType)}`);
+  document.getElementById('checklistTemplateTableBody').innerHTML = rows.map((t) => `
+    <tr>
+      <td>${t.category || '-'}</td>
+      <td>${t.label}</td>
+      <td>${t.sort_order}</td>
+      <td class="sticky-actions">
+        <button class="btn small" onclick="editChecklistTemplate(${t.id})">Edit</button>
+        ${canDelete() ? `<button class="btn danger small" onclick="deleteChecklistTemplate(${t.id})">Delete</button>` : ''}
+      </td>
+    </tr>
+  `).join('') || '<tr><td colspan="4" class="empty">No template items yet for this category — add one above.</td></tr>';
+}
+document.getElementById('checklistTemplateFilterSelect')?.addEventListener('change', refreshChecklistTemplates);
+
+document.getElementById('checklistTemplateForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const body = {
+    owner_type: form.elements.owner_type.value,
+    category: form.elements.category.value,
+    sort_order: Number(form.elements.sort_order.value) || 0,
+    label: form.elements.label.value.trim()
+  };
+  if (!body.label) return;
+  try {
+    if (form.dataset.editId) {
+      await jput(`${API}/checklist-templates/${form.dataset.editId}`, body);
+      toast('Checklist template item updated.');
+      delete form.dataset.editId;
+      document.getElementById('checklistTemplateSubmitBtn').textContent = 'Add template item';
+      document.getElementById('checklistTemplateCancelEditBtn').style.display = 'none';
+    } else {
+      await jpost(`${API}/checklist-templates`, body);
+      toast('Checklist template item added.');
+    }
+    form.reset();
+    form.elements.owner_type.value = body.owner_type;
+    document.getElementById('checklistTemplateFilterSelect').value = body.owner_type;
+    await refreshChecklistTemplates();
+  } catch (err) { toast(err.message); }
+});
+document.getElementById('checklistTemplateCancelEditBtn')?.addEventListener('click', () => {
+  const form = document.getElementById('checklistTemplateForm');
+  form.reset(); delete form.dataset.editId;
+  document.getElementById('checklistTemplateSubmitBtn').textContent = 'Add template item';
+  document.getElementById('checklistTemplateCancelEditBtn').style.display = 'none';
+});
+window.editChecklistTemplate = async (id) => {
+  const ownerType = document.getElementById('checklistTemplateFilterSelect').value;
+  const rows = await jget(`${API}/checklist-templates?owner_type=${encodeURIComponent(ownerType)}`);
+  const t = rows.find((r) => r.id === id);
+  if (!t) return;
+  const form = document.getElementById('checklistTemplateForm');
+  form.elements.owner_type.value = t.owner_type;
+  form.elements.category.value = t.category || '';
+  form.elements.sort_order.value = t.sort_order;
+  form.elements.label.value = t.label;
+  form.dataset.editId = id;
+  document.getElementById('checklistTemplateSubmitBtn').textContent = 'Update template item';
+  document.getElementById('checklistTemplateCancelEditBtn').style.display = '';
+  form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+};
+window.deleteChecklistTemplate = async (id) => {
+  if (!confirm('Delete this checklist template item? Existing checklists that already used it are unaffected.')) return;
+  try {
+    await jdel(`${API}/checklist-templates/${id}`);
+    await refreshChecklistTemplates();
   } catch (err) { toast(err.message); }
 };
 // Refreshes whichever admin table shows a checklist progress count, after the
@@ -2143,6 +2206,7 @@ function loadAllData() {
   refreshAssignmentDropdowns();
   refreshAssignments();
   refreshTasks();
+  refreshChecklistTemplates();
   refreshPartners();
   refreshDrivers();
   refreshVehicles();
