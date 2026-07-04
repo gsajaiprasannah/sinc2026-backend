@@ -903,6 +903,11 @@
           </div>
         </div>
         <div class="field"><label>Topic / session</label><textarea name="topic" placeholder="What they'll speak on or moderate"></textarea></div>
+        <div class="field">
+          <label>Guest Relation member (host member liaison)</label>
+          <select name="guest_relation_host_member_id" id="speakerHmSelect"><option value="">-- none --</option></select>
+          <span class="hint">Shows up on this host member's own portal as a responsibility.</span>
+        </div>
         <div class="field"><label>Status</label>
           <select name="status">
             <option value="invited">Invited</option>
@@ -918,7 +923,7 @@
     <div class="section-title">All guest speakers</div>
     <div class="card table-scroll">
       <table>
-        <thead><tr><th>Name</th><th>Role</th><th>Topic</th><th>Checklist</th><th>Status</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Role</th><th>Topic</th><th>Guest Relation</th><th>Checklist</th><th>Status</th><th></th></tr></thead>
         <tbody id="speakerTableBody"></tbody>
       </table>
     </div>
@@ -959,6 +964,11 @@
             </select>
           </div>
         </div>
+        <div class="field">
+          <label>Guest Relation member (host member liaison)</label>
+          <select name="guest_relation_host_member_id" id="gvHmSelect"><option value="">-- none --</option></select>
+          <span class="hint">Shows up on this host member's own portal as a responsibility.</span>
+        </div>
         <div class="field"><label>Notes</label><textarea name="notes"></textarea></div>
         <button class="btn gold" type="submit" id="gvSubmitBtn">Save Guest Visitor</button>
         <button type="button" class="btn outline" id="gvCancelEditBtn" style="display:none;">Cancel edit</button>
@@ -967,7 +977,7 @@
     <div class="section-title">All guest visitors</div>
     <div class="card table-scroll">
       <table>
-        <thead><tr><th>Name</th><th>Category</th><th>Organization</th><th>Visit date</th><th>Offerings</th><th>Status</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Category</th><th>Organization</th><th>Visit date</th><th>Guest Relation</th><th>Offerings</th><th>Status</th><th></th></tr></thead>
         <tbody id="gvTableBody"></tbody>
       </table>
     </div>

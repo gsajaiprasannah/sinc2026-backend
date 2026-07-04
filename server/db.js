@@ -393,6 +393,7 @@ async function initSchema() {
       email TEXT,
       topic TEXT,
       session_type TEXT NOT NULL DEFAULT 'Speaker',
+      guest_relation_host_member_id INTEGER REFERENCES host_members(id) ON DELETE SET NULL,
       status TEXT NOT NULL DEFAULT 'invited' CHECK (status IN ('invited','confirmed','cancelled')),
       notes TEXT,
       created_at TIMESTAMP DEFAULT NOW()
@@ -409,6 +410,7 @@ async function initSchema() {
       email TEXT,
       category TEXT,
       visit_date DATE,
+      guest_relation_host_member_id INTEGER REFERENCES host_members(id) ON DELETE SET NULL,
       status TEXT NOT NULL DEFAULT 'invited' CHECK (status IN ('invited','confirmed','cancelled')),
       notes TEXT,
       created_at TIMESTAMP DEFAULT NOW()
@@ -542,6 +544,12 @@ async function initSchema() {
   // committees need the column backfilled (Postgres CREATE TABLE IF NOT
   // EXISTS above is a no-op once the table already exists).
   await pool.query(`ALTER TABLE committees ADD COLUMN IF NOT EXISTS description TEXT;`);
+
+  // Guest Relation (host-member liaison) — originally sponsor-only, now also
+  // available for speakers and guest visitors. Backfill for databases where
+  // these tables were created before this column existed.
+  await pool.query(`ALTER TABLE speakers ADD COLUMN IF NOT EXISTS guest_relation_host_member_id INTEGER REFERENCES host_members(id) ON DELETE SET NULL;`);
+  await pool.query(`ALTER TABLE guest_visitors ADD COLUMN IF NOT EXISTS guest_relation_host_member_id INTEGER REFERENCES host_members(id) ON DELETE SET NULL;`);
 }
 
 module.exports = { pool, all, get, run, transaction, initSchema };

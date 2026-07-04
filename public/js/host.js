@@ -47,8 +47,15 @@ async function jget(url) {
 async function jput(url, body) {
   const r = await fetch(url, { method: 'PUT', headers: authHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify(body) });
   if (r.status === 401) { handleUnauthorized(); throw new UnauthorizedError('Please log in again.'); }
-  const data = await r.json();
-  if (!r.ok) { const err = new Error(data.error || 'Request failed'); err.data = data; err.status = r.status; throw err; }
+  const text = await r.text();
+  let data;
+  try { data = text ? JSON.parse(text) : {}; }
+  catch (e) {
+    throw new Error(!r.ok
+      ? `Server returned HTTP ${r.status} instead of JSON — the backend may not have this endpoint deployed yet.`
+      : 'Server returned an unexpected (non-JSON) response.');
+  }
+  if (!r.ok) { const err = new Error(data.error || `Request failed (HTTP ${r.status})`); err.data = data; err.status = r.status; throw err; }
   return data;
 }
 
@@ -129,7 +136,7 @@ async function loadMe() {
   renderCommittees(data.committeeTasks || []);
   renderAssignments(data.assignments);
   renderTasks(data.tasks);
-  renderSponsorRelations(data.sponsorRelations);
+  renderGuestRelations(data.guestRelations);
   renderGoodiesChecklist(data.goodiesChecklist);
 }
 
@@ -236,15 +243,19 @@ function checklistRowsHtml(items) {
   `).join('') || '<p class="hint">Nothing on this checklist yet.</p>';
 }
 
-function renderSponsorRelations(sponsors) {
+function renderGuestRelations(relations) {
   const card = document.getElementById('sponsorRelationsCard');
-  if (!sponsors || !sponsors.length) { card.style.display = 'none'; return; }
+  if (!relations || !relations.length) { card.style.display = 'none'; return; }
   card.style.display = '';
-  document.getElementById('sponsorRelationsBody').innerHTML = sponsors.map((s) => `
+  document.getElementById('sponsorRelationsBody').innerHTML = relations.map((r) => `
     <div style="margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--line);">
-      <p style="margin:0 0 6px;"><strong>${s.name}</strong>${s.tier ? ' <span class="hint">(' + s.tier + ')</span>' : ''}</p>
-      <p class="hint" style="margin:0 0 8px;">${[s.contact_person, s.phone, s.email].filter(Boolean).join(' · ') || 'No contact details on file'}</p>
-      ${checklistRowsHtml(s.checklist)}
+      <p style="margin:0 0 6px;">
+        <span class="pill single" style="margin-right:6px;">${r.kindLabel}</span>
+        <strong>${r.name}</strong>${r.subtitle ? ' <span class="hint">(' + r.subtitle + ')</span>' : ''}
+      </p>
+      ${r.topic ? `<p class="hint" style="margin:0 0 4px;">Topic: ${r.topic}</p>` : ''}
+      <p class="hint" style="margin:0 0 8px;">${[r.contact_person, r.phone, r.email].filter(Boolean).join(' · ') || 'No contact details on file'}</p>
+      ${checklistRowsHtml(r.checklist)}
     </div>
   `).join('');
 }
