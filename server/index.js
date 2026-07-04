@@ -60,6 +60,12 @@ app.use('/api/drivers', requireAuth, require('./routes/drivers'));
 // Self-service host-member portal — does its own auth + ownership checks.
 app.use('/api/host', require('./routes/host'));
 
+// --- Operations module: Transport Planning + Pre Tours. Same protection ---
+// level as the host club module above (internal logistics/personal data). ---
+app.use('/api/vehicles', requireAuth, require('./routes/vehicles'));
+app.use('/api/transport', requireAuth, require('./routes/transport'));
+app.use('/api/pretours', requireAuth, require('./routes/pretours'));
+
 // --- Public reads (needed by the public dashboard), protected writes ---
 app.use('/api', (req, res, next) => {
   if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(req.method)) {

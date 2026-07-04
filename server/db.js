@@ -239,6 +239,100 @@ async function initSchema() {
       description TEXT,
       sort_order INTEGER NOT NULL DEFAULT 0
     );
+
+    -- --- Operations: Transport Planning + Pre Tours ---
+    -- Masters: vehicles, identified by an auto-generated code so anyone on
+    -- the ground can radio/WhatsApp "S001" instead of a full number plate.
+    -- Prefix carries the type: S = van (Shuttle van), C = car, A = bus (coACH).
+    CREATE TABLE IF NOT EXISTS vehicles (
+      id SERIAL PRIMARY KEY,
+      vehicle_code TEXT NOT NULL UNIQUE,
+      vehicle_type TEXT NOT NULL CHECK (vehicle_type IN ('van','car','bus')),
+      model TEXT,
+      seating_capacity INTEGER NOT NULL DEFAULT 0,
+      registration_number TEXT,
+      partner_id INTEGER REFERENCES partners(id) ON DELETE SET NULL,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+
+    -- Shuttle/trip planning: mobilising delegates + host members between
+    -- venues, hotels, and attractions. pre_tour_id is set only when this trip
+    -- belongs to a Pre Tour's own transport plan; NULL means general congress
+    -- transport planning. Reusing one table for both keeps vehicle/driver
+    -- assignment and passenger management identical in both modules.
+    CREATE TABLE IF NOT EXISTS transport_trips (
+      id SERIAL PRIMARY KEY,
+      pre_tour_id INTEGER,
+      trip_date DATE,
+      depart_time TEXT,
+      from_location TEXT NOT NULL,
+      to_location TEXT NOT NULL,
+      purpose TEXT,
+      vehicle_id INTEGER REFERENCES vehicles(id) ON DELETE SET NULL,
+      driver_id INTEGER REFERENCES drivers(id) ON DELETE SET NULL,
+      status TEXT NOT NULL DEFAULT 'planned' CHECK (status IN ('planned','in_progress','completed','cancelled')),
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
+
+    -- Passenger manifest per trip. Exactly one of participant_id (a delegate)
+    -- or host_member_id must be set — mobilisation covers both audiences.
+    CREATE TABLE IF NOT EXISTS transport_trip_passengers (
+      id SERIAL PRIMARY KEY,
+      trip_id INTEGER NOT NULL REFERENCES transport_trips(id) ON DELETE CASCADE,
+      participant_id INTEGER REFERENCES participants(id) ON DELETE CASCADE,
+      host_member_id INTEGER REFERENCES host_members(id) ON DELETE CASCADE,
+      pickup_point TEXT,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      CHECK ((participant_id IS NOT NULL AND host_member_id IS NULL) OR (participant_id IS NULL AND host_member_id IS NOT NULL)),
+      UNIQUE(trip_id, participant_id),
+      UNIQUE(trip_id, host_member_id)
+    );
+
+    -- Pre Tours: optional pre-congress excursions (hotel + attractions +
+    -- itinerary + their own transport plan), each linked to the delegates and
+    -- host members who opted in.
+    CREATE TABLE IF NOT EXISTS pre_tours (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      start_date DATE,
+      end_date DATE,
+      hotel TEXT,
+      attractions TEXT,
+      description TEXT,
+      capacity INTEGER,
+      price NUMERIC,
+      status TEXT NOT NULL DEFAULT 'planned' CHECK (status IN ('planned','confirmed','cancelled','completed')),
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS pre_tour_itinerary (
+      id SERIAL PRIMARY KEY,
+      pre_tour_id INTEGER NOT NULL REFERENCES pre_tours(id) ON DELETE CASCADE,
+      day_label TEXT NOT NULL,
+      time_label TEXT,
+      title TEXT NOT NULL,
+      description TEXT,
+      location TEXT,
+      sort_order INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS pre_tour_participants (
+      id SERIAL PRIMARY KEY,
+      pre_tour_id INTEGER NOT NULL REFERENCES pre_tours(id) ON DELETE CASCADE,
+      participant_id INTEGER REFERENCES participants(id) ON DELETE CASCADE,
+      host_member_id INTEGER REFERENCES host_members(id) ON DELETE CASCADE,
+      payment_status TEXT NOT NULL DEFAULT 'pending' CHECK (payment_status IN ('paid','pending')),
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      CHECK ((participant_id IS NOT NULL AND host_member_id IS NULL) OR (participant_id IS NULL AND host_member_id IS NOT NULL)),
+      UNIQUE(pre_tour_id, participant_id),
+      UNIQUE(pre_tour_id, host_member_id)
+    );
   `);
 
   // Safe to run repeatedly — links a 'users' login to a host_members profile
@@ -293,6 +387,28 @@ async function initSchema() {
   `);
   await pool.query(`SELECT setval('participant_code_seq', GREATEST((SELECT COUNT(*) FROM participants), 1));`);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS participants_code_uidx ON participants(participant_code);`);
+
+  // --- Operations module follow-up migrations ---
+  // A driver's usual/default vehicle, linked to the new vehicles master
+  // instead of the old freetext vehicle_number/vehicle_type columns (kept
+  // in place, unused by the new UI, so no historical data is lost).
+  await pool.query(`ALTER TABLE drivers ADD COLUMN IF NOT EXISTS vehicle_id INTEGER REFERENCES vehicles(id) ON DELETE SET NULL;`);
+
+  // transport_trips.pre_tour_id is declared without a FK above (pre_tours is
+  // created later in the same script) — add the FK now that both tables
+  // definitely exist. Guarded so this only runs once.
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'transport_trips_pre_tour_id_fkey'
+      ) THEN
+        ALTER TABLE transport_trips
+          ADD CONSTRAINT transport_trips_pre_tour_id_fkey
+          FOREIGN KEY (pre_tour_id) REFERENCES pre_tours(id) ON DELETE SET NULL;
+      END IF;
+    END $$;
+  `);
 }
 
 module.exports = { pool, all, get, run, transaction, initSchema };
