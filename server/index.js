@@ -88,17 +88,27 @@ app.use('/api/checklist-items', requireAuth, require('./routes/checklistHelper')
 // Milestones admin tab; this is what "quick add" suggestions are drawn from.
 app.use('/api/checklist-templates', requireAuth, require('./routes/checklistTemplates'));
 
-// --- Congress dashboard data (clubs/stats/media/happenings/itinerary) ---
-// The dashboard (index.html) is no longer public — it has its own login gate
-// requiring an admin or super_admin session, and every method here (GET
-// included) is now rejected without one. admin.html already sends an admin
-// session on every request, so this is transparent to it; host.html never
-// calls any of these routes, so it's unaffected too.
+// --- Congress registration stats: admin/super_admin only ---
+// The stats dashboard now lives at dashboard.html with its own login gate.
+// clubs (raw club list, used by admin.html's Clubs tab) and stats (overview/
+// club-comparison/nationwide/dietary) are the registration-derived data that
+// stays gated — every method, GET included, requires an admin session.
 app.use('/api/clubs', requireAdminRole, require('./routes/clubs'));
-app.use('/api/media', requireAdminRole, require('./routes/media'));
-app.use('/api/itinerary', requireAdminRole, require('./routes/itinerary'));
-app.use('/api/happenings', requireAdminRole, require('./routes/happenings'));
 app.use('/api/stats', requireAdminRole, require('./routes/stats'));
+
+// --- Public promotional content (used by the public homepage, index.html) ---
+// media (video reel/posters), itinerary, and happenings are public reads —
+// anyone can view them without logging in — but still require an admin
+// session to create/edit/delete, same as before the dashboard was split up.
+app.use('/api', (req, res, next) => {
+  if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(req.method)) {
+    return requireAuth(req, res, next);
+  }
+  next();
+});
+app.use('/api/media', require('./routes/media'));
+app.use('/api/itinerary', require('./routes/itinerary'));
+app.use('/api/happenings', require('./routes/happenings'));
 
 app.get('/api/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
