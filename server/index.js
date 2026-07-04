@@ -3,7 +3,7 @@ const cors = require('cors');
 const path = require('path');
 const db = require('./db');
 const { runBackup } = require('./backup');
-const { hashPassword, requireAuth, requireSuperAdmin } = require('./auth');
+const { hashPassword, requireAuth, requireSuperAdmin, requireAdminRole } = require('./auth');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -25,8 +25,10 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Static frontend + locally-stored media (when R2 isn't configured).
-// admin.html itself is served openly — its own JS shows a login screen and
-// refuses to load any data until a valid token is obtained from /api/auth/login.
+// admin.html and index.html are both served openly as static HTML — each
+// page's own JS shows a login screen and refuses to load any data until a
+// valid token is obtained from /api/auth/login. The real protection is
+// server-side: every dashboard data route below requires that token.
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
 // --- Auth routes (signup/login are public; user-management is self-gated inside) ---
@@ -86,18 +88,17 @@ app.use('/api/checklist-items', requireAuth, require('./routes/checklistHelper')
 // Milestones admin tab; this is what "quick add" suggestions are drawn from.
 app.use('/api/checklist-templates', requireAuth, require('./routes/checklistTemplates'));
 
-// --- Public reads (needed by the public dashboard), protected writes ---
-app.use('/api', (req, res, next) => {
-  if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(req.method)) {
-    return requireAuth(req, res, next);
-  }
-  next();
-});
-app.use('/api/clubs', require('./routes/clubs'));
-app.use('/api/media', require('./routes/media'));
-app.use('/api/itinerary', require('./routes/itinerary'));
-app.use('/api/happenings', require('./routes/happenings'));
-app.use('/api/stats', require('./routes/stats'));
+// --- Congress dashboard data (clubs/stats/media/happenings/itinerary) ---
+// The dashboard (index.html) is no longer public — it has its own login gate
+// requiring an admin or super_admin session, and every method here (GET
+// included) is now rejected without one. admin.html already sends an admin
+// session on every request, so this is transparent to it; host.html never
+// calls any of these routes, so it's unaffected too.
+app.use('/api/clubs', requireAdminRole, require('./routes/clubs'));
+app.use('/api/media', requireAdminRole, require('./routes/media'));
+app.use('/api/itinerary', requireAdminRole, require('./routes/itinerary'));
+app.use('/api/happenings', requireAdminRole, require('./routes/happenings'));
+app.use('/api/stats', requireAdminRole, require('./routes/stats'));
 
 app.get('/api/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 

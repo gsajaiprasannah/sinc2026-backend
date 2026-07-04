@@ -53,4 +53,17 @@ function requireSuperAdmin(req, res, next) {
   });
 }
 
-module.exports = { hashPassword, verifyPassword, signToken, verifyToken, requireAuth, requireSuperAdmin };
+// Requires a valid Bearer token AND role in ('admin','super_admin') — used to
+// lock the congress dashboard (clubs/stats/media/happenings/itinerary) down
+// to admin accounts only, rejecting host_member (and any future restricted
+// role) even though their token is otherwise valid.
+function requireAdminRole(req, res, next) {
+  requireAuth(req, res, () => {
+    if (!['admin', 'super_admin'].includes(req.user.role)) {
+      return res.status(403).json({ error: 'This dashboard is for admin accounts only.' });
+    }
+    next();
+  });
+}
+
+module.exports = { hashPassword, verifyPassword, signToken, verifyToken, requireAuth, requireSuperAdmin, requireAdminRole };
