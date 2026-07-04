@@ -496,6 +496,53 @@ async function initSchema() {
       created_at TIMESTAMP DEFAULT NOW(),
       CHECK ((participant_id IS NOT NULL AND host_member_id IS NULL) OR (participant_id IS NULL AND host_member_id IS NOT NULL))
     );
+
+    -- --- Goodies & Inventory: procurement + per-recipient delivery         ---
+    -- --- tracking for physical items (kits, badges, souvenirs, merch,      ---
+    -- --- etc.). Deliberately separate from checklist_items above — this    ---
+    -- --- needs actual QUANTITIES in stock (procured vs. distributed vs.    ---
+    -- --- remaining), which a pending/in_progress/done flag can't express.  ---
+    CREATE TABLE IF NOT EXISTS inventory_items (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      category TEXT NOT NULL DEFAULT '',
+      unit TEXT NOT NULL DEFAULT 'pcs',
+      quantity_procured INTEGER NOT NULL DEFAULT 0,
+      reorder_threshold INTEGER,
+      vendor_name TEXT,
+      unit_cost NUMERIC,
+      procurement_status TEXT NOT NULL DEFAULT 'planned' CHECK (procurement_status IN ('planned','ordered','received','distributing','completed')),
+      responsible_committee_id INTEGER REFERENCES committees(id) ON DELETE SET NULL,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS inventory_items_committee_idx ON inventory_items(responsible_committee_id);
+
+    -- One row per recipient who should receive a given item — "who it was
+    -- delivered to". assigned_host_member_id is who's SUPPOSED to hand it
+    -- over (pre-assigned, e.g. "Bindu will personally deliver this");
+    -- delivered_by_host_member_id + delivered_at are stamped with who
+    -- ACTUALLY delivered it once marked delivered — may be a stand-in for
+    -- whoever was assigned.
+    CREATE TABLE IF NOT EXISTS inventory_distributions (
+      id SERIAL PRIMARY KEY,
+      inventory_item_id INTEGER NOT NULL REFERENCES inventory_items(id) ON DELETE CASCADE,
+      recipient_type TEXT NOT NULL CHECK (recipient_type IN ('sponsor','speaker','guest_visitor','participant','host_member')),
+      recipient_id INTEGER NOT NULL,
+      quantity INTEGER NOT NULL DEFAULT 1,
+      assigned_host_member_id INTEGER REFERENCES host_members(id) ON DELETE SET NULL,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','delivered','cancelled')),
+      delivered_by_host_member_id INTEGER REFERENCES host_members(id) ON DELETE SET NULL,
+      delivered_at TIMESTAMP,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE(inventory_item_id, recipient_type, recipient_id)
+    );
+    CREATE INDEX IF NOT EXISTS inventory_distributions_item_idx ON inventory_distributions(inventory_item_id);
+    CREATE INDEX IF NOT EXISTS inventory_distributions_recipient_idx ON inventory_distributions(recipient_type, recipient_id);
+    CREATE INDEX IF NOT EXISTS inventory_distributions_assigned_idx ON inventory_distributions(assigned_host_member_id);
   `);
 
   // Safe to run repeatedly — links a 'users' login to a host_members profile

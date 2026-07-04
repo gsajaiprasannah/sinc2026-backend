@@ -68,6 +68,11 @@ app.use('/api/pretours', requireAuth, require('./routes/pretours'));
 app.use('/api/hotels', requireAuth, require('./routes/hotels'));
 app.use('/api/rooms', requireAuth, require('./routes/rooms'));
 
+// Goodies & Inventory: procurement stock list + per-recipient delivery
+// tracking (who it went to, who was assigned to deliver it, who actually
+// did + when), tagged to a responsible committee per item.
+app.use('/api/inventory', requireAuth, require('./routes/inventory'));
+
 // --- Sponsors, Guest Speakers, Guest Visitors — each with their own ---
 // customizable checklist (benefits / what-must-reach-them / offerings). ---
 // /api/checklist-items is the single shared edit/delete-by-id endpoint used ---

@@ -151,7 +151,37 @@ router.get('/me', requireHostMember, async (req, res) => {
       }
       committeeChecklists = Array.from(map.values());
     }
-    res.json({ profile, committees, committeeTasks, assignments, tasks, guestRelations, goodiesChecklist, committeeChecklists });
+    // Goodies/inventory deliveries this member's committee(s) are
+    // responsible for — same idea as committeeChecklists above but for
+    // physical items, with is_assigned_to_me flagging rows they personally
+    // (rather than just their committee) were assigned to hand over.
+    let committeeDeliveries = [];
+    if (committeeIds.length) {
+      const rows = await db.all(`
+        SELECT d.*, i.name AS item_name, i.category AS item_category,
+          i.responsible_committee_id AS committee_id, c.name AS committee_name,
+          COALESCE(s.name, sp.name, gv.name, p.name, hm.name) AS recipient_name,
+          (d.assigned_host_member_id = $2) AS is_assigned_to_me
+        FROM inventory_distributions d
+        JOIN inventory_items i ON i.id = d.inventory_item_id
+        LEFT JOIN committees c ON c.id = i.responsible_committee_id
+        LEFT JOIN sponsors s ON d.recipient_type='sponsor' AND d.recipient_id = s.id
+        LEFT JOIN speakers sp ON d.recipient_type='speaker' AND d.recipient_id = sp.id
+        LEFT JOIN guest_visitors gv ON d.recipient_type='guest_visitor' AND d.recipient_id = gv.id
+        LEFT JOIN participants p ON d.recipient_type='participant' AND d.recipient_id = p.id
+        LEFT JOIN host_members hm ON d.recipient_type='host_member' AND d.recipient_id = hm.id
+        WHERE i.responsible_committee_id = ANY($1::int[]) AND d.status != 'cancelled'
+        ORDER BY (d.status='pending') DESC, d.id
+      `, [committeeIds, id]);
+      const map = new Map();
+      for (const row of rows) {
+        const cid = row.committee_id;
+        if (!map.has(cid)) map.set(cid, { committee_id: cid, committee_name: row.committee_name, items: [] });
+        map.get(cid).items.push(row);
+      }
+      committeeDeliveries = Array.from(map.values());
+    }
+    res.json({ profile, committees, committeeTasks, assignments, tasks, guestRelations, goodiesChecklist, committeeChecklists, committeeDeliveries });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -228,6 +258,51 @@ router.put('/checklist/:id', requireHostMember, async (req, res) => {
     await db.run(
       'UPDATE checklist_items SET status=$1, notes=COALESCE($2,notes), completed_by_user_id=$3, completed_at=$4, updated_at=NOW() WHERE id=$5',
       [newStatus, notes !== undefined ? notes : null, completedByUserId, completedAt, req.params.id]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// Mark a goodies/inventory delivery done (or reopen it) — allowed for any
+// member of the item's responsible committee, same permission model as
+// /checklist/:id above. delivered_by_host_member_id is ALWAYS this
+// authenticated member's own id (never client-supplied), so it can't be
+// spoofed as someone else having delivered it; assigned_host_member_id and
+// quantity stay admin-only (via /api/inventory), not editable here.
+router.put('/deliveries/:id', requireHostMember, async (req, res) => {
+  try {
+    const dist = await db.get(`
+      SELECT d.*, i.responsible_committee_id
+      FROM inventory_distributions d
+      JOIN inventory_items i ON i.id = d.inventory_item_id
+      WHERE d.id=$1
+    `, [req.params.id]);
+    if (!dist) return res.status(404).json({ error: 'Delivery record not found.' });
+    if (!dist.responsible_committee_id) return res.status(403).json({ error: 'This item has no responsible committee assigned.' });
+    const onCommittee = await db.get(
+      'SELECT 1 AS ok FROM committee_members WHERE committee_id=$1 AND host_member_id=$2',
+      [dist.responsible_committee_id, req.hostMemberId]
+    );
+    if (!onCommittee) return res.status(403).json({ error: 'You are not able to update this delivery.' });
+    const { status, notes } = req.body;
+    const newStatus = status || dist.status;
+    if (!['pending', 'delivered', 'cancelled'].includes(newStatus)) {
+      return res.status(400).json({ error: 'status must be pending, delivered, or cancelled' });
+    }
+    let deliveredBy = dist.delivered_by_host_member_id;
+    let deliveredAt = dist.delivered_at;
+    if (newStatus === 'delivered' && dist.status !== 'delivered') {
+      deliveredBy = req.hostMemberId;
+      deliveredAt = new Date();
+    } else if (newStatus !== 'delivered' && dist.status === 'delivered') {
+      deliveredBy = null;
+      deliveredAt = null;
+    }
+    await db.run(
+      'UPDATE inventory_distributions SET status=$1, notes=COALESCE($2,notes), delivered_by_host_member_id=$3, delivered_at=$4, updated_at=NOW() WHERE id=$5',
+      [newStatus, notes !== undefined ? notes : null, deliveredBy, deliveredAt, req.params.id]
     );
     res.json({ ok: true });
   } catch (e) {
