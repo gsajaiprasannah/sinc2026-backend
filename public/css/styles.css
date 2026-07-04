@@ -328,6 +328,8 @@ tr:nth-child(even) .sticky-col-left { background: #fff; }
 .pill.done, .pill.completed { background: #e3f7f8; color: #1f9a86; }
 .pill.in_progress { background: #fdf8e0; color: #a6900a; }
 .pill.not_started { background: #eef1f5; color: #55606e; }
+.pill.overdue { background: #fdeaea; color: var(--red); font-weight: 800; }
+tr.row-overdue td { background: #fff6f6; }
 
 .media-two-col {
   grid-template-columns: 1fr;

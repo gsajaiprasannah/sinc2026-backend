@@ -5,7 +5,21 @@
 // distinguished by owner_type + owner_id (see server/db.js). Keeping this in
 // one place means the checklist behavior (add/edit/remove arbitrary items)
 // stays identical everywhere instead of drifting per entity.
+//
+// Delivery accountability: every item can carry a responsible_committee_id
+// (who's actually handing this over — e.g. Welcome Kit -> Welcome &
+// Registration Committee), a due_date, and — once marked done — who closed
+// it out and when (completed_by_user_id / completed_at). See
+// server/routes/deliveryMonitor.js for the cross-committee dashboard this
+// feeds.
 const db = require('../db');
+
+const SELECT_WITH_COMMITTEE = `
+  SELECT ci.*, c.name AS responsible_committee_name, u.username AS completed_by_username
+  FROM checklist_items ci
+  LEFT JOIN committees c ON c.id = ci.responsible_committee_id
+  LEFT JOIN users u ON u.id = ci.completed_by_user_id
+`;
 
 // Call from an owner's own route file (sponsors.js, speakers.js, etc.) to add
 // GET/POST nested checklist routes under its existing :id-based router, e.g.
@@ -14,7 +28,7 @@ function attachChecklistRoutes(router, ownerType) {
   router.get('/:id/checklist', async (req, res) => {
     try {
       const rows = await db.all(
-        'SELECT * FROM checklist_items WHERE owner_type=$1 AND owner_id=$2 ORDER BY sort_order, id',
+        `${SELECT_WITH_COMMITTEE} WHERE ci.owner_type=$1 AND ci.owner_id=$2 ORDER BY ci.sort_order, ci.id`,
         [ownerType, req.params.id]
       );
       res.json(rows);
@@ -24,13 +38,14 @@ function attachChecklistRoutes(router, ownerType) {
   });
 
   router.post('/:id/checklist', async (req, res) => {
-    const { label, category, status, sort_order, notes } = req.body;
+    const { label, category, status, sort_order, notes, responsible_committee_id, due_date } = req.body;
     if (!label || !label.trim()) return res.status(400).json({ error: 'label is required' });
     try {
       const result = await db.run(`
-        INSERT INTO checklist_items (owner_type, owner_id, category, label, status, sort_order, notes)
-        VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id
-      `, [ownerType, req.params.id, category || '', label.trim(), status || 'pending', Number(sort_order) || 0, notes || '']);
+        INSERT INTO checklist_items (owner_type, owner_id, category, label, status, sort_order, notes, responsible_committee_id, due_date)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id
+      `, [ownerType, req.params.id, category || '', label.trim(), status || 'pending', Number(sort_order) || 0,
+          notes || '', responsible_committee_id || null, due_date || null]);
       res.json({ id: result.id });
     } catch (e) {
       res.status(400).json({ error: e.message });
@@ -38,19 +53,20 @@ function attachChecklistRoutes(router, ownerType) {
   });
 
   // Convenience: add several items in one call (used by "quick add from
-  // template" buttons in the admin UI — still just free-text labels, nothing
-  // enforced or hardcoded at the DB level).
+  // template" buttons in the admin UI). Each item can carry over its
+  // template's default responsible_committee_id — still just free-text
+  // labels otherwise, nothing enforced at the DB level.
   router.post('/:id/checklist/bulk', async (req, res) => {
-    const { items } = req.body; // [{ label, category }, ...]
+    const { items } = req.body; // [{ label, category, responsible_committee_id }, ...]
     if (!Array.isArray(items) || !items.length) return res.status(400).json({ error: 'items array is required' });
     try {
       const ids = [];
       for (const item of items) {
         if (!item || !item.label || !item.label.trim()) continue;
         const result = await db.run(`
-          INSERT INTO checklist_items (owner_type, owner_id, category, label, status)
-          VALUES ($1,$2,$3,$4,'pending') RETURNING id
-        `, [ownerType, req.params.id, item.category || '', item.label.trim()]);
+          INSERT INTO checklist_items (owner_type, owner_id, category, label, status, responsible_committee_id)
+          VALUES ($1,$2,$3,$4,'pending',$5) RETURNING id
+        `, [ownerType, req.params.id, item.category || '', item.label.trim(), item.responsible_committee_id || null]);
         ids.push(result.id);
       }
       res.json({ ids });
@@ -69,21 +85,53 @@ async function deleteChecklistForOwner(ownerType, ownerId) {
 
 // Mounted once, standalone, at /api/checklist-items — edit/reorder/delete a
 // single item by its own id, shared across every owner type since item ids
-// are globally unique regardless of which owner they belong to.
+// are globally unique regardless of which owner they belong to. Also hosts
+// the cross-committee Delivery Monitor endpoints (registered before the
+// /:itemId routes so literal paths like /monitor aren't swallowed as ids).
 function buildChecklistItemsRouter() {
   const express = require('express');
   const router = express.Router();
+  const { attachDeliveryMonitorRoutes } = require('./deliveryMonitor');
+
+  attachDeliveryMonitorRoutes(router);
 
   router.put('/:itemId', async (req, res) => {
-    const { label, category, status, sort_order, notes } = req.body;
+    const body = req.body;
     try {
+      const existing = await db.get('SELECT * FROM checklist_items WHERE id=$1', [req.params.itemId]);
+      if (!existing) return res.status(404).json({ error: 'Checklist item not found.' });
+
+      const label = body.label !== undefined && body.label.trim() ? body.label.trim() : existing.label;
+      const category = body.category !== undefined ? body.category : existing.category;
+      const status = body.status !== undefined ? body.status : existing.status;
+      const sort_order = body.sort_order !== undefined ? Number(body.sort_order) : existing.sort_order;
+      const notes = body.notes !== undefined ? body.notes : existing.notes;
+      // responsible_committee_id and due_date are NOT wrapped in COALESCE —
+      // sending an explicit null clears them (e.g. "unassign committee"),
+      // while simply omitting the field leaves the existing value alone.
+      const responsible_committee_id = body.responsible_committee_id !== undefined
+        ? (body.responsible_committee_id || null) : existing.responsible_committee_id;
+      const due_date = body.due_date !== undefined ? (body.due_date || null) : existing.due_date;
+
+      // Track who closed an item out and when, without letting an unrelated
+      // edit (e.g. just changing the due date) wipe that history. Moving an
+      // item back off "done" clears the completion stamp again.
+      let completed_by_user_id = existing.completed_by_user_id;
+      let completed_at = existing.completed_at;
+      if (status === 'done' && existing.status !== 'done') {
+        completed_by_user_id = req.user ? req.user.id : null;
+        completed_at = new Date();
+      } else if (status !== 'done' && existing.status === 'done') {
+        completed_by_user_id = null;
+        completed_at = null;
+      }
+
       await db.run(`
         UPDATE checklist_items SET
-          label=COALESCE($1,label), category=COALESCE($2,category), status=COALESCE($3,status),
-          sort_order=COALESCE($4,sort_order), notes=COALESCE($5,notes), updated_at=NOW()
-        WHERE id=$6
-      `, [label || null, category !== undefined ? category : null, status || null,
-          sort_order !== undefined ? Number(sort_order) : null, notes !== undefined ? notes : null, req.params.itemId]);
+          label=$1, category=$2, status=$3, sort_order=$4, notes=$5,
+          responsible_committee_id=$6, due_date=$7, completed_by_user_id=$8, completed_at=$9, updated_at=NOW()
+        WHERE id=$10
+      `, [label, category, status, sort_order, notes, responsible_committee_id, due_date, completed_by_user_id, completed_at, req.params.itemId]);
       res.json({ ok: true });
     } catch (e) {
       res.status(400).json({ error: e.message });
@@ -98,4 +146,4 @@ function buildChecklistItemsRouter() {
   return router;
 }
 
-module.exports = { attachChecklistRoutes, deleteChecklistForOwner, buildChecklistItemsRouter };
+module.exports = { attachChecklistRoutes, deleteChecklistForOwner, buildChecklistItemsRouter, SELECT_WITH_COMMITTEE };

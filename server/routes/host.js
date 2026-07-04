@@ -108,16 +108,50 @@ router.get('/me', requireHostMember, async (req, res) => {
     ];
     for (const rel of guestRelations) {
       rel.checklist = await db.all(
-        `SELECT * FROM checklist_items WHERE owner_type=$1 AND owner_id=$2 ORDER BY sort_order, id`,
+        `SELECT ci.*, c.name AS responsible_committee_name FROM checklist_items ci
+         LEFT JOIN committees c ON c.id = ci.responsible_committee_id
+         WHERE ci.owner_type=$1 AND ci.owner_id=$2 ORDER BY ci.sort_order, ci.id`,
         [rel.kind, rel.id]
       );
     }
     // This host member's own goodies/kit handover checklist.
     const goodiesChecklist = await db.all(
-      `SELECT * FROM checklist_items WHERE owner_type='host_member' AND owner_id=$1 ORDER BY sort_order, id`,
+      `SELECT ci.*, c.name AS responsible_committee_name FROM checklist_items ci
+       LEFT JOIN committees c ON c.id = ci.responsible_committee_id
+       WHERE ci.owner_type='host_member' AND ci.owner_id=$1 ORDER BY ci.sort_order, ci.id`,
       [id]
     );
-    res.json({ profile, committees, committeeTasks, assignments, tasks, guestRelations, goodiesChecklist });
+    // Checklist items — across every category, for any delegate/host
+    // member/sponsor/speaker/guest visitor — where one of this member's
+    // committees is the delivery-accountable committee. This is what makes
+    // "the Welcome & Registration Committee hands over the Welcome Kit" show
+    // up to that committee's members, not just to whoever the admin assigned
+    // the item's own Guest Relation liaison role to.
+    const committeeIds = committees.map((c) => c.id);
+    let committeeChecklists = [];
+    if (committeeIds.length) {
+      const rows = await db.all(`
+        SELECT ci.*, COALESCE(s.name, sp.name, gv.name, p.name, hm.name) AS owner_name, c.name AS committee_name,
+          (ci.status != 'done' AND ci.due_date IS NOT NULL AND ci.due_date < CURRENT_DATE) AS is_overdue
+        FROM checklist_items ci
+        LEFT JOIN sponsors s ON ci.owner_type='sponsor' AND ci.owner_id = s.id
+        LEFT JOIN speakers sp ON ci.owner_type='speaker' AND ci.owner_id = sp.id
+        LEFT JOIN guest_visitors gv ON ci.owner_type='guest_visitor' AND ci.owner_id = gv.id
+        LEFT JOIN participants p ON ci.owner_type='participant' AND ci.owner_id = p.id
+        LEFT JOIN host_members hm ON ci.owner_type='host_member' AND ci.owner_id = hm.id
+        LEFT JOIN committees c ON c.id = ci.responsible_committee_id
+        WHERE ci.responsible_committee_id = ANY($1::int[])
+        ORDER BY is_overdue DESC, ci.due_date ASC NULLS LAST, ci.id
+      `, [committeeIds]);
+      const map = new Map();
+      for (const row of rows) {
+        const cid = row.responsible_committee_id;
+        if (!map.has(cid)) map.set(cid, { committee_id: cid, committee_name: row.committee_name, items: [] });
+        map.get(cid).items.push(row);
+      }
+      committeeChecklists = Array.from(map.values());
+    }
+    res.json({ profile, committees, committeeTasks, assignments, tasks, guestRelations, goodiesChecklist, committeeChecklists });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -154,8 +188,11 @@ router.put('/tasks/:id', requireHostMember, async (req, res) => {
 const GUEST_RELATION_TABLES = { sponsor: 'sponsors', speaker: 'speakers', guest_visitor: 'guest_visitors' };
 
 // Update the status of a checklist item this host member is allowed to
-// touch: either their own goodies/kit checklist, or the checklist of a
-// sponsor/speaker/guest visitor they're the Guest Relation contact for.
+// touch: their own goodies/kit checklist, the checklist of a sponsor/
+// speaker/guest visitor they're the Guest Relation contact for, OR — new —
+// any checklist item whose delivery-accountable committee they belong to
+// (e.g. any Welcome Kit item routed to the Welcome & Registration Committee,
+// regardless of which delegate it belongs to).
 router.put('/checklist/:id', requireHostMember, async (req, res) => {
   try {
     const item = await db.get('SELECT * FROM checklist_items WHERE id=$1', [req.params.id]);
@@ -167,11 +204,30 @@ router.put('/checklist/:id', requireHostMember, async (req, res) => {
       const owner = await db.get(`SELECT id FROM ${table} WHERE id=$1 AND guest_relation_host_member_id=$2`, [item.owner_id, req.hostMemberId]);
       if (owner) allowed = true;
     }
+    if (!allowed && item.responsible_committee_id) {
+      const onCommittee = await db.get(
+        'SELECT 1 AS ok FROM committee_members WHERE committee_id=$1 AND host_member_id=$2',
+        [item.responsible_committee_id, req.hostMemberId]
+      );
+      if (onCommittee) allowed = true;
+    }
     if (!allowed) return res.status(403).json({ error: 'You are not able to update this checklist item.' });
     const { status, notes } = req.body;
+    const newStatus = status || item.status;
+    // Same completion audit trail as the admin-side edit endpoint — who
+    // closed it out, and when, cleared again if it's reopened.
+    let completedByUserId = item.completed_by_user_id;
+    let completedAt = item.completed_at;
+    if (newStatus === 'done' && item.status !== 'done') {
+      completedByUserId = req.user.id;
+      completedAt = new Date();
+    } else if (newStatus !== 'done' && item.status === 'done') {
+      completedByUserId = null;
+      completedAt = null;
+    }
     await db.run(
-      'UPDATE checklist_items SET status=COALESCE($1,status), notes=COALESCE($2,notes), updated_at=NOW() WHERE id=$3',
-      [status || null, notes !== undefined ? notes : null, req.params.id]
+      'UPDATE checklist_items SET status=$1, notes=COALESCE($2,notes), completed_by_user_id=$3, completed_at=$4, updated_at=NOW() WHERE id=$5',
+      [newStatus, notes !== undefined ? notes : null, completedByUserId, completedAt, req.params.id]
     );
     res.json({ ok: true });
   } catch (e) {

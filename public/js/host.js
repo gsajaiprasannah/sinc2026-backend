@@ -134,6 +134,7 @@ async function loadMe() {
   renderProfile(data.profile);
   renderPayment(data.profile);
   renderCommittees(data.committeeTasks || []);
+  renderCommitteeChecklists(data.committeeChecklists);
   renderAssignments(data.assignments);
   renderTasks(data.tasks);
   renderGuestRelations(data.guestRelations);
@@ -230,17 +231,40 @@ window.updateTaskStatus = async (id, status) => {
 };
 
 // --- Sponsors I'm the Guest Relation contact for (with their benefit checklist) ---
-function checklistRowsHtml(items) {
-  return (items || []).map((it) => `
-    <div class="checklist-row status-${it.status}">
+// opts.showOwner also displays whose item it is (used by the committee
+// delivery checklist below, where one committee's list spans many different
+// delegates/sponsors/etc.).
+function checklistRowsHtml(items, opts) {
+  opts = opts || {};
+  return (items || []).map((it) => {
+    const overdue = it.status !== 'done' && it.due_date && it.due_date.slice(0, 10) < new Date().toISOString().slice(0, 10);
+    return `
+    <div class="checklist-row status-${it.status}${overdue ? ' row-overdue' : ''}">
       <select onchange="updateHostChecklistStatus(${it.id}, this.value)">
         <option value="pending" ${it.status === 'pending' ? 'selected' : ''}>Pending</option>
         <option value="in_progress" ${it.status === 'in_progress' ? 'selected' : ''}>In progress</option>
         <option value="done" ${it.status === 'done' ? 'selected' : ''}>Done</option>
       </select>
-      <span class="checklist-label">${it.label}</span>
+      <span class="checklist-label">
+        ${opts.showOwner && it.owner_name ? `<span class="pill single" style="margin-right:6px;">${it.owner_name}</span>` : ''}${it.label}${it.due_date ? ` <span class="hint">(due ${it.due_date.slice(0, 10)})</span>` : ''}
+      </span>
+      ${overdue ? '<span class="pill overdue">Overdue</span>' : ''}
     </div>
-  `).join('') || '<p class="hint">Nothing on this checklist yet.</p>';
+  `;
+  }).join('') || '<p class="hint">Nothing on this checklist yet.</p>';
+}
+
+// --- What my committee(s) need to deliver, across every category ---
+function renderCommitteeChecklists(groups) {
+  const card = document.getElementById('committeeChecklistCard');
+  if (!groups || !groups.length) { card.style.display = 'none'; return; }
+  card.style.display = '';
+  document.getElementById('committeeChecklistBody').innerHTML = groups.map((g) => `
+    <div style="margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--line);">
+      <p style="margin:0 0 6px;"><strong>${g.committee_name}</strong></p>
+      ${checklistRowsHtml(g.items, { showOwner: true })}
+    </div>
+  `).join('');
 }
 
 function renderGuestRelations(relations) {

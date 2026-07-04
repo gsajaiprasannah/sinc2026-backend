@@ -786,9 +786,25 @@ window.saveHostPayment = async (id) => {
 
 // --- Committees ---
 let ALL_COMMITTEES_CACHE = [];
+
+// Keeps every "which committee is responsible for this?" dropdown in sync
+// with the committee list — used by checklist templates and, per-item, by
+// the checklist modal (see committeeSelectOptions()).
+function populateCommitteeSelects() {
+  const opts = ALL_COMMITTEES_CACHE.map((c) => `<option value="${c.id}">${c.name}</option>`).join('');
+  ['checklistTemplateCommitteeSelect'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const cur = el.value;
+    el.innerHTML = '<option value="">Unassigned</option>' + opts;
+    if (cur) el.value = cur;
+  });
+}
+
 async function refreshCommittees() {
   const rows = await jget(`${API}/committees`);
   ALL_COMMITTEES_CACHE = rows;
+  populateCommitteeSelects();
   document.getElementById('committeesList').innerHTML = rows.map((c) => `
     <div class="card" style="margin-bottom:10px;">
       <div style="display:flex;justify-content:space-between;align-items:center;">
@@ -1561,13 +1577,26 @@ document.getElementById('tourTripForm').addEventListener('submit', async (e) => 
 // Visitors (offerings), and the goodies/kit handover checklist on
 // Participants + Host Members. Quick-add suggestions are drawn live from the
 // master checklist templates (managed on the Checklists & Milestones tab —
-// see refreshChecklistTemplates() below), not hardcoded here.
+// see refreshChecklistTemplates() below), not hardcoded here. Every item can
+// carry a responsible committee + due date, and once marked done shows who
+// closed it out — see server/routes/checklistHelper.js.
 const CHECKLIST_BASE = { sponsor: 'sponsors', speaker: 'speakers', guest_visitor: 'guestvisitors', participant: 'participants', host_member: 'hostmembers' };
+const OWNER_TYPE_LABELS = { sponsor: 'Sponsor', speaker: 'Guest Speaker', guest_visitor: 'Guest Visitor', participant: 'Delegate', host_member: 'Host Member' };
 
-async function fetchChecklistTemplateLabels(ownerType) {
+function committeeSelectOptions(selectedId) {
+  const opts = ALL_COMMITTEES_CACHE.map((c) =>
+    `<option value="${c.id}" ${String(selectedId) === String(c.id) ? 'selected' : ''}>${c.name}</option>`
+  ).join('');
+  return `<option value="">Unassigned</option>${opts}`;
+}
+function isOverdue(item) {
+  if (item.status === 'done' || !item.due_date) return false;
+  return item.due_date.slice(0, 10) < new Date().toISOString().slice(0, 10);
+}
+
+async function fetchChecklistTemplateRows(ownerType) {
   try {
-    const rows = await jget(`${API}/checklist-templates?owner_type=${encodeURIComponent(ownerType)}`);
-    return rows.map((r) => r.label);
+    return await jget(`${API}/checklist-templates?owner_type=${encodeURIComponent(ownerType)}`);
   } catch (e) { return []; }
 }
 
@@ -1595,33 +1624,44 @@ async function renderChecklistBody() {
   if (!ownerType || !ownerId) return;
   const base = CHECKLIST_BASE[ownerType];
   const items = await jget(`${API}/${base}/${ownerId}/checklist`);
-  const rowsHtml = items.map((it) => `
-    <div class="checklist-row status-${it.status}">
-      <select onchange="updateChecklistItemStatus(${it.id}, this.value)">
+  const rowsHtml = items.map((it) => {
+    const overdue = isOverdue(it);
+    return `
+    <div class="checklist-row status-${it.status}${overdue ? ' row-overdue' : ''}">
+      <select onchange="updateChecklistItemField(${it.id}, 'status', this.value)">
         <option value="pending" ${it.status === 'pending' ? 'selected' : ''}>Pending</option>
         <option value="in_progress" ${it.status === 'in_progress' ? 'selected' : ''}>In progress</option>
         <option value="done" ${it.status === 'done' ? 'selected' : ''}>Done</option>
       </select>
       <span class="checklist-label">${it.label}</span>
+      <select style="max-width:150px;" title="Responsible committee" onchange="updateChecklistItemField(${it.id}, 'responsible_committee_id', this.value || null)">
+        ${committeeSelectOptions(it.responsible_committee_id)}
+      </select>
+      <input type="date" value="${it.due_date ? it.due_date.slice(0, 10) : ''}" style="max-width:135px;" title="Due date" onchange="updateChecklistItemField(${it.id}, 'due_date', this.value || null)" />
+      ${overdue ? '<span class="pill overdue">Overdue</span>' : ''}
+      ${it.status === 'done' && it.completed_by_username ? `<span class="hint">✓ ${it.completed_by_username}</span>` : ''}
       ${canDelete() ? `<button class="btn danger small" onclick="deleteChecklistItem(${it.id})">Delete</button>` : ''}
     </div>
-  `).join('') || '<p class="empty">No checklist items yet — add one below.</p>';
+  `;
+  }).join('') || '<p class="empty">No checklist items yet — add one below.</p>';
 
-  const templates = await fetchChecklistTemplateLabels(ownerType);
+  const templateRows = await fetchChecklistTemplateRows(ownerType);
   const existingLabels = new Set(items.map((it) => it.label));
-  const suggestions = templates.filter((t) => !existingLabels.has(t));
+  const suggestions = templateRows.filter((t) => !existingLabels.has(t.label));
 
   document.getElementById('checklistModalBody').innerHTML = `
     ${rowsHtml}
-    <form onsubmit="return submitChecklistItem(event)" style="margin-top:12px;display:flex;gap:8px;">
-      <input name="label" placeholder="Add a checklist item..." required style="flex:1;" />
+    <form onsubmit="return submitChecklistItem(event)" style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
+      <input name="label" placeholder="Add a checklist item..." required style="flex:1;min-width:160px;" />
+      <select name="responsible_committee_id" style="max-width:170px;">${committeeSelectOptions(null)}</select>
+      <input name="due_date" type="date" style="max-width:140px;" />
       <button class="btn gold small" type="submit">Add</button>
     </form>
     ${suggestions.length ? `
       <div style="margin-top:10px;">
         <span class="hint">Quick add suggestions:</span>
         <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;">
-          ${suggestions.map((s) => `<button type="button" class="btn outline small" onclick="quickAddChecklistItem('${s.replace(/'/g, "\\'")}')">+ ${s}</button>`).join('')}
+          ${suggestions.map((t) => `<button type="button" class="btn outline small" onclick="quickAddChecklistItem('${t.label.replace(/'/g, "\\'")}', ${t.responsible_committee_id || 'null'})">+ ${t.label}${t.responsible_committee_name ? ` (${t.responsible_committee_name})` : ''}</button>`).join('')}
         </div>
         <button type="button" class="btn small" style="margin-top:8px;" onclick="quickAddAllChecklistItems()">+ Add all suggested items</button>
       </div>
@@ -1629,8 +1669,8 @@ async function renderChecklistBody() {
   `;
 }
 
-window.updateChecklistItemStatus = async (itemId, status) => {
-  try { await jput(`${API}/checklist-items/${itemId}`, { status }); await renderChecklistBody(); refreshOwnerListForChecklist(); }
+window.updateChecklistItemField = async (itemId, field, value) => {
+  try { await jput(`${API}/checklist-items/${itemId}`, { [field]: value }); await renderChecklistBody(); refreshOwnerListForChecklist(); }
   catch (err) { toast(err.message); }
 };
 window.deleteChecklistItem = async (itemId) => {
@@ -1644,19 +1684,21 @@ window.submitChecklistItem = async (e) => {
   const base = CHECKLIST_BASE[ownerType];
   const label = e.target.elements.label.value.trim();
   if (!label) return false;
+  const responsible_committee_id = e.target.elements.responsible_committee_id.value || null;
+  const due_date = e.target.elements.due_date.value || null;
   try {
-    await jpost(`${API}/${base}/${ownerId}/checklist`, { label });
+    await jpost(`${API}/${base}/${ownerId}/checklist`, { label, responsible_committee_id, due_date });
     e.target.reset();
     await renderChecklistBody();
     refreshOwnerListForChecklist();
   } catch (err) { toast(err.message); }
   return false;
 };
-window.quickAddChecklistItem = async (label) => {
+window.quickAddChecklistItem = async (label, committeeId) => {
   const { ownerType, ownerId } = checklistCtx;
   const base = CHECKLIST_BASE[ownerType];
   try {
-    await jpost(`${API}/${base}/${ownerId}/checklist`, { label });
+    await jpost(`${API}/${base}/${ownerId}/checklist`, { label, responsible_committee_id: committeeId || null });
     await renderChecklistBody();
     refreshOwnerListForChecklist();
   } catch (err) { toast(err.message); }
@@ -1665,9 +1707,11 @@ window.quickAddAllChecklistItems = async () => {
   const { ownerType, ownerId } = checklistCtx;
   const base = CHECKLIST_BASE[ownerType];
   try {
-    const templates = await fetchChecklistTemplateLabels(ownerType);
-    if (!templates.length) { toast('No master checklist template items defined for this category yet — add some from Checklists & Milestones.'); return; }
-    await jpost(`${API}/${base}/${ownerId}/checklist/bulk`, { items: templates.map((label) => ({ label })) });
+    const templateRows = await fetchChecklistTemplateRows(ownerType);
+    if (!templateRows.length) { toast('No master checklist template items defined for this category yet — add some from Checklists & Milestones.'); return; }
+    await jpost(`${API}/${base}/${ownerId}/checklist/bulk`, {
+      items: templateRows.map((t) => ({ label: t.label, category: t.category, responsible_committee_id: t.responsible_committee_id }))
+    });
     await renderChecklistBody();
     refreshOwnerListForChecklist();
   } catch (err) { toast(err.message); }
@@ -1677,19 +1721,21 @@ window.quickAddAllChecklistItems = async () => {
 async function refreshChecklistTemplates() {
   const filterSel = document.getElementById('checklistTemplateFilterSelect');
   if (!filterSel) return;
+  populateCommitteeSelects();
   const ownerType = filterSel.value || 'sponsor';
   const rows = await jget(`${API}/checklist-templates?owner_type=${encodeURIComponent(ownerType)}`);
   document.getElementById('checklistTemplateTableBody').innerHTML = rows.map((t) => `
     <tr>
       <td>${t.category || '-'}</td>
       <td>${t.label}</td>
+      <td>${t.responsible_committee_name || 'Unassigned'}</td>
       <td>${t.sort_order}</td>
       <td class="sticky-actions">
         <button class="btn small" onclick="editChecklistTemplate(${t.id})">Edit</button>
         ${canDelete() ? `<button class="btn danger small" onclick="deleteChecklistTemplate(${t.id})">Delete</button>` : ''}
       </td>
     </tr>
-  `).join('') || '<tr><td colspan="4" class="empty">No template items yet for this category — add one above.</td></tr>';
+  `).join('') || '<tr><td colspan="5" class="empty">No template items yet for this category — add one above.</td></tr>';
 }
 document.getElementById('checklistTemplateFilterSelect')?.addEventListener('change', refreshChecklistTemplates);
 
@@ -1700,6 +1746,7 @@ document.getElementById('checklistTemplateForm')?.addEventListener('submit', asy
     owner_type: form.elements.owner_type.value,
     category: form.elements.category.value,
     sort_order: Number(form.elements.sort_order.value) || 0,
+    responsible_committee_id: form.elements.responsible_committee_id.value || null,
     label: form.elements.label.value.trim()
   };
   if (!body.label) return;
@@ -1714,9 +1761,10 @@ document.getElementById('checklistTemplateForm')?.addEventListener('submit', asy
       await jpost(`${API}/checklist-templates`, body);
       toast('Checklist template item added.');
     }
+    const ownerType = body.owner_type;
     form.reset();
-    form.elements.owner_type.value = body.owner_type;
-    document.getElementById('checklistTemplateFilterSelect').value = body.owner_type;
+    form.elements.owner_type.value = ownerType;
+    document.getElementById('checklistTemplateFilterSelect').value = ownerType;
     await refreshChecklistTemplates();
   } catch (err) { toast(err.message); }
 });
@@ -1735,6 +1783,7 @@ window.editChecklistTemplate = async (id) => {
   form.elements.owner_type.value = t.owner_type;
   form.elements.category.value = t.category || '';
   form.elements.sort_order.value = t.sort_order;
+  form.elements.responsible_committee_id.value = t.responsible_committee_id || '';
   form.elements.label.value = t.label;
   form.dataset.editId = id;
   document.getElementById('checklistTemplateSubmitBtn').textContent = 'Update template item';
@@ -1755,7 +1804,74 @@ function refreshOwnerListForChecklist() {
   if (t === 'sponsor') refreshSponsors();
   if (t === 'speaker') refreshSpeakers();
   if (t === 'guest_visitor') refreshGuestVisitors();
+  refreshDeliveryMonitor();
 }
+
+// --- Delivery Monitor: cross-committee rollup + reassignment ---
+async function refreshDeliveryMonitorSummary() {
+  const rows = await jget(`${API}/checklist-items/monitor/summary`);
+  document.getElementById('monitorSummaryBody').innerHTML = rows.map((r) => `
+    <tr class="${r.overdue > 0 ? 'row-overdue' : ''}">
+      <td>${r.committee_name || 'Unassigned'}</td>
+      <td>${r.total}</td>
+      <td>${r.done}</td>
+      <td>${r.in_progress}</td>
+      <td>${r.pending}</td>
+      <td>${r.overdue > 0 ? `<span class="pill overdue">${r.overdue}</span>` : '0'}</td>
+      <td>${r.completion_pct !== null ? r.completion_pct + '%' : '-'}</td>
+    </tr>
+  `).join('') || '<tr><td colspan="7" class="empty">No checklist items yet.</td></tr>';
+
+  const committeeOptions = rows.filter((r) => r.committee_id).map((r) => `<option value="${r.committee_id}">${r.committee_name}</option>`).join('');
+  const fromSel = document.getElementById('monitorFromCommitteeSelect');
+  const toSel = document.getElementById('monitorToCommitteeSelect');
+  if (fromSel) { const cur = fromSel.value; fromSel.innerHTML = '<option value="">Unassigned</option>' + committeeOptions; fromSel.value = cur; }
+  if (toSel) { const cur = toSel.value; toSel.innerHTML = '<option value="">Unassigned</option>' + committeeOptions; toSel.value = cur; }
+  const filterSel = document.getElementById('monitorFilterCommittee');
+  if (filterSel) { const cur = filterSel.value; filterSel.innerHTML = '<option value="">All committees</option><option value="unassigned">Unassigned</option>' + committeeOptions; filterSel.value = cur; }
+}
+
+async function refreshDeliveryMonitorDetail() {
+  const committee = document.getElementById('monitorFilterCommittee')?.value || '';
+  const status = document.getElementById('monitorFilterStatus')?.value || '';
+  const ownerType = document.getElementById('monitorFilterOwnerType')?.value || '';
+  const params = new URLSearchParams();
+  if (committee) params.set('committee_id', committee);
+  if (status) params.set('status', status);
+  if (ownerType) params.set('owner_type', ownerType);
+  const rows = await jget(`${API}/checklist-items/monitor?${params.toString()}`);
+  document.getElementById('monitorDetailBody').innerHTML = rows.map((r) => `
+    <tr class="${r.is_overdue ? 'row-overdue' : ''}">
+      <td>${r.label}</td>
+      <td>${OWNER_TYPE_LABELS[r.owner_type] || r.owner_type}</td>
+      <td>${r.owner_name || '-'}</td>
+      <td>${r.responsible_committee_name || 'Unassigned'}</td>
+      <td>${r.due_date ? r.due_date.slice(0, 10) : '-'}${r.is_overdue ? ' <span class="pill overdue">Overdue</span>' : ''}</td>
+      <td><span class="pill ${r.status === 'done' ? 'done' : r.status === 'in_progress' ? 'in_progress' : 'pending'}">${r.status}</span></td>
+      <td>${r.completed_by_username ? `${r.completed_by_username}${r.completed_at ? ' · ' + new Date(r.completed_at).toLocaleDateString() : ''}` : '-'}</td>
+    </tr>
+  `).join('') || '<tr><td colspan="7" class="empty">No checklist items match this filter.</td></tr>';
+}
+
+async function refreshDeliveryMonitor() {
+  if (!document.getElementById('monitorSummaryBody')) return;
+  await refreshDeliveryMonitorSummary();
+  await refreshDeliveryMonitorDetail();
+}
+['monitorFilterCommittee', 'monitorFilterStatus', 'monitorFilterOwnerType'].forEach((id) => {
+  document.getElementById(id)?.addEventListener('change', refreshDeliveryMonitorDetail);
+});
+document.getElementById('monitorReassignForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const from_committee_id = document.getElementById('monitorFromCommitteeSelect').value || null;
+  const to_committee_id = document.getElementById('monitorToCommitteeSelect').value || null;
+  const only_incomplete = document.getElementById('monitorReassignScope').value !== 'all';
+  try {
+    const res = await jput(`${API}/checklist-items/reassign-committee`, { from_committee_id, to_committee_id, only_incomplete });
+    toast(`Reassigned ${res.reassigned} item(s).`);
+    await refreshDeliveryMonitor();
+  } catch (err) { toast(err.message); }
+});
 
 // --- Sponsors ---
 async function refreshSponsors() {
@@ -2207,6 +2323,7 @@ function loadAllData() {
   refreshAssignments();
   refreshTasks();
   refreshChecklistTemplates();
+  refreshDeliveryMonitor();
   refreshPartners();
   refreshDrivers();
   refreshVehicles();

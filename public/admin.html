@@ -513,6 +513,12 @@
           <div class="field"><label>Sub-category (optional)</label><input name="category" placeholder="e.g. Benefit, Logistics" /></div>
           <div class="field"><label>Sort order</label><input name="sort_order" type="number" value="0" /></div>
         </div>
+        <div class="form-grid cols-3">
+          <div class="field"><label>Responsible committee</label>
+            <select name="responsible_committee_id" id="checklistTemplateCommitteeSelect"><option value="">Unassigned</option></select>
+            <span class="hint">Default committee for delivering every item quick-added from this template (e.g. Welcome Kit → Welcome &amp; Registration Committee). Can still be overridden per person.</span>
+          </div>
+        </div>
         <div class="field"><label>Checklist item label *</label><input name="label" required /></div>
         <button class="btn gold" type="submit" id="checklistTemplateSubmitBtn">Add template item</button>
         <button type="button" class="btn outline" id="checklistTemplateCancelEditBtn" style="display:none;">Cancel edit</button>
@@ -529,8 +535,65 @@
         </select>
       </div>
       <table>
-        <thead><tr><th>Sub-category</th><th>Checklist item</th><th>Sort</th><th></th></tr></thead>
+        <thead><tr><th>Sub-category</th><th>Checklist item</th><th>Committee</th><th>Sort</th><th></th></tr></thead>
         <tbody id="checklistTemplateTableBody"></tbody>
+      </table>
+    </div>
+
+    <div class="section-title">Delivery monitor — by committee</div>
+    <div class="card">
+      <p class="hint" style="margin-top:0;">Every checklist item across every category (Delegates, Host Members, Sponsors, Guest Speakers, Guest Visitors), rolled up by which committee is responsible for actually delivering it. "Unassigned" means no committee owns it yet.</p>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Committee</th><th>Total</th><th>Done</th><th>In progress</th><th>Pending</th><th>Overdue</th><th>Completion</th></tr></thead>
+          <tbody id="monitorSummaryBody"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card">
+      <div class="section-title" style="margin-top:0">Reassign a committee's outstanding items</div>
+      <p class="hint" style="margin-top:0;">Move everything from one committee to another in one action — handy if a committee is overloaded or its responsibilities shift.</p>
+      <form id="monitorReassignForm">
+        <div class="form-grid cols-3">
+          <div class="field"><label>From</label><select id="monitorFromCommitteeSelect"><option value="">Unassigned</option></select></div>
+          <div class="field"><label>To</label><select id="monitorToCommitteeSelect"><option value="">Unassigned</option></select></div>
+          <div class="field"><label>Scope</label>
+            <select id="monitorReassignScope">
+              <option value="incomplete">Only outstanding (not yet done)</option>
+              <option value="all">Everything, including completed items</option>
+            </select>
+          </div>
+        </div>
+        <button class="btn gold" type="submit">Reassign</button>
+      </form>
+    </div>
+    <div class="card table-scroll">
+      <div class="form-grid cols-3">
+        <div class="field"><label>Committee</label>
+          <select id="monitorFilterCommittee"><option value="">All committees</option><option value="unassigned">Unassigned</option></select>
+        </div>
+        <div class="field"><label>Status</label>
+          <select id="monitorFilterStatus">
+            <option value="">All statuses</option>
+            <option value="pending">Pending</option>
+            <option value="in_progress">In progress</option>
+            <option value="done">Done</option>
+          </select>
+        </div>
+        <div class="field"><label>Category</label>
+          <select id="monitorFilterOwnerType">
+            <option value="">All categories</option>
+            <option value="participant">Delegates</option>
+            <option value="host_member">Host Members</option>
+            <option value="sponsor">Sponsors</option>
+            <option value="speaker">Guest Speakers</option>
+            <option value="guest_visitor">Guest Visitors</option>
+          </select>
+        </div>
+      </div>
+      <table>
+        <thead><tr><th>Item</th><th>Category</th><th>Owner</th><th>Committee</th><th>Due</th><th>Status</th><th>Completed by</th></tr></thead>
+        <tbody id="monitorDetailBody"></tbody>
       </table>
     </div>
   </section>

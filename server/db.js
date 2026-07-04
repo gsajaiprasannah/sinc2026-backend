@@ -433,10 +433,19 @@ async function initSchema() {
       status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','in_progress','done')),
       sort_order INTEGER NOT NULL DEFAULT 0,
       notes TEXT,
+      -- Delivery accountability: which committee is responsible for actually
+      -- handing this item over (e.g. Welcome Kit -> Welcome & Registration
+      -- Committee), when it's due, and who closed it out + when — so
+      -- "monitoring delivery" means more than just a status flip.
+      responsible_committee_id INTEGER REFERENCES committees(id) ON DELETE SET NULL,
+      due_date DATE,
+      completed_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      completed_at TIMESTAMP,
       created_at TIMESTAMP DEFAULT NOW(),
       updated_at TIMESTAMP DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS checklist_items_owner_idx ON checklist_items(owner_type, owner_id);
+    CREATE INDEX IF NOT EXISTS checklist_items_committee_idx ON checklist_items(responsible_committee_id);
 
     -- --- Master checklist templates: the predefined set of checklist items ---
     -- --- that SHOULD be completed for each category (Delegates, Host        ---
@@ -445,12 +454,16 @@ async function initSchema() {
     -- --- "menu" of suggestions — they get copied into an individual's own   ---
     -- --- checklist_items row (above) when quick-added, so editing/deleting  ---
     -- --- a template afterwards never touches checklists already handed out. ---
+    -- --- responsible_committee_id is the DEFAULT committee for every item   ---
+    -- --- quick-added from this template; each resulting checklist_items row ---
+    -- --- can still have its own responsible_committee_id overridden later. ---
     CREATE TABLE IF NOT EXISTS checklist_templates (
       id SERIAL PRIMARY KEY,
       owner_type TEXT NOT NULL CHECK (owner_type IN ('sponsor','speaker','guest_visitor','participant','host_member')),
       category TEXT NOT NULL DEFAULT '',
       label TEXT NOT NULL,
       sort_order INTEGER NOT NULL DEFAULT 0,
+      responsible_committee_id INTEGER REFERENCES committees(id) ON DELETE SET NULL,
       created_at TIMESTAMP DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS checklist_templates_owner_idx ON checklist_templates(owner_type);
@@ -567,6 +580,16 @@ async function initSchema() {
   // these tables were created before this column existed.
   await pool.query(`ALTER TABLE speakers ADD COLUMN IF NOT EXISTS guest_relation_host_member_id INTEGER REFERENCES host_members(id) ON DELETE SET NULL;`);
   await pool.query(`ALTER TABLE guest_visitors ADD COLUMN IF NOT EXISTS guest_relation_host_member_id INTEGER REFERENCES host_members(id) ON DELETE SET NULL;`);
+
+  // Delivery accountability: committee ownership + due dates + completion
+  // audit trail on checklist items, and a default committee per template.
+  // Backfill for databases where these tables were created before these
+  // columns existed.
+  await pool.query(`ALTER TABLE checklist_items ADD COLUMN IF NOT EXISTS responsible_committee_id INTEGER REFERENCES committees(id) ON DELETE SET NULL;`);
+  await pool.query(`ALTER TABLE checklist_items ADD COLUMN IF NOT EXISTS due_date DATE;`);
+  await pool.query(`ALTER TABLE checklist_items ADD COLUMN IF NOT EXISTS completed_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL;`);
+  await pool.query(`ALTER TABLE checklist_items ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP;`);
+  await pool.query(`ALTER TABLE checklist_templates ADD COLUMN IF NOT EXISTS responsible_committee_id INTEGER REFERENCES committees(id) ON DELETE SET NULL;`);
 
   // One-time seed of the master checklist templates — only runs while the
   // table is still empty, so it never overwrites anything an admin has since
