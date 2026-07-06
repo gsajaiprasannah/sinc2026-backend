@@ -45,48 +45,57 @@ app.use('/api', (req, res, next) => {
 });
 
 // --- Fully protected — personal data (names/phones/emails/addresses) and ---
-// --- payment data never leave the server without a valid login.          ---
-app.use('/api/participants', requireAuth, require('./routes/participants'));
-app.use('/api/registrations', requireAuth, require('./routes/registrations'));
-app.use('/api/export', requireAuth, require('./routes/export'));
+// --- payment data never leave the server without a valid ADMIN login.    ---
+// requireAdminRole (not just requireAuth) so that the restricted-scope
+// logins below (host_member, media, transporter, driver) — which are all
+// otherwise-valid tokens — can't reach this internal staff data even by
+// calling the API directly; each of those gets its own narrow self-service
+// route instead (/api/host, /api/driver-portal, /api/transporter-portal).
+app.use('/api/participants', requireAdminRole, require('./routes/participants'));
+app.use('/api/registrations', requireAdminRole, require('./routes/registrations'));
+app.use('/api/export', requireAdminRole, require('./routes/export'));
 
 // --- Host club module — host member directory, committees, delegate ---
 // --- assistance assignments, and their checklist/milestones. All internal ---
 // --- staff data, so fully protected like participants/registrations.     ---
-app.use('/api/hostmembers', requireAuth, require('./routes/hostmembers'));
-app.use('/api/committees', requireAuth, require('./routes/committees'));
-app.use('/api/assignments', requireAuth, require('./routes/assignments'));
-app.use('/api/tasks', requireAuth, require('./routes/tasks'));
-app.use('/api/partners', requireAuth, require('./routes/partners'));
-app.use('/api/drivers', requireAuth, require('./routes/drivers'));
-// Self-service host-member portal — does its own auth + ownership checks.
+app.use('/api/hostmembers', requireAdminRole, require('./routes/hostmembers'));
+app.use('/api/committees', requireAdminRole, require('./routes/committees'));
+app.use('/api/assignments', requireAdminRole, require('./routes/assignments'));
+app.use('/api/tasks', requireAdminRole, require('./routes/tasks'));
+app.use('/api/partners', requireAdminRole, require('./routes/partners'));
+app.use('/api/drivers', requireAdminRole, require('./routes/drivers'));
+// Self-service portals — each does its own auth + ownership scoping rather
+// than a blanket admin gate, so the linked person only ever sees their own
+// data (their assignments, their trips, their partner's fleet).
 app.use('/api/host', require('./routes/host'));
+app.use('/api/driver-portal', require('./routes/driverPortal'));
+app.use('/api/transporter-portal', require('./routes/transporterPortal'));
 
 // --- Operations module: Transport Planning + Pre Tours. Same protection ---
 // level as the host club module above (internal logistics/personal data). ---
-app.use('/api/vehicles', requireAuth, require('./routes/vehicles'));
-app.use('/api/transport', requireAuth, require('./routes/transport'));
-app.use('/api/pretours', requireAuth, require('./routes/pretours'));
-app.use('/api/hotels', requireAuth, require('./routes/hotels'));
-app.use('/api/rooms', requireAuth, require('./routes/rooms'));
+app.use('/api/vehicles', requireAdminRole, require('./routes/vehicles'));
+app.use('/api/transport', requireAdminRole, require('./routes/transport'));
+app.use('/api/pretours', requireAdminRole, require('./routes/pretours'));
+app.use('/api/hotels', requireAdminRole, require('./routes/hotels'));
+app.use('/api/rooms', requireAdminRole, require('./routes/rooms'));
 
 // Goodies & Inventory: procurement stock list + per-recipient delivery
 // tracking (who it went to, who was assigned to deliver it, who actually
 // did + when), tagged to a responsible committee per item.
-app.use('/api/inventory', requireAuth, require('./routes/inventory'));
+app.use('/api/inventory', requireAdminRole, require('./routes/inventory'));
 
 // --- Sponsors, Guest Speakers, Guest Visitors — each with their own ---
 // customizable checklist (benefits / what-must-reach-them / offerings). ---
 // /api/checklist-items is the single shared edit/delete-by-id endpoint used ---
 // by every owner type (sponsor, speaker, guest_visitor, participant, ---
 // host_member) — see server/routes/checklistHelper.js. ---
-app.use('/api/sponsors', requireAuth, require('./routes/sponsors'));
-app.use('/api/speakers', requireAuth, require('./routes/speakers'));
-app.use('/api/guestvisitors', requireAuth, require('./routes/guestvisitors'));
-app.use('/api/checklist-items', requireAuth, require('./routes/checklistHelper').buildChecklistItemsRouter());
+app.use('/api/sponsors', requireAdminRole, require('./routes/sponsors'));
+app.use('/api/speakers', requireAdminRole, require('./routes/speakers'));
+app.use('/api/guestvisitors', requireAdminRole, require('./routes/guestvisitors'));
+app.use('/api/checklist-items', requireAdminRole, require('./routes/checklistHelper').buildChecklistItemsRouter());
 // Master checklist templates (per category) — managed from the Checklists &
 // Milestones admin tab; this is what "quick add" suggestions are drawn from.
-app.use('/api/checklist-templates', requireAuth, require('./routes/checklistTemplates'));
+app.use('/api/checklist-templates', requireAdminRole, require('./routes/checklistTemplates'));
 
 // --- Congress registration stats: admin/super_admin only ---
 // The stats dashboard now lives at dashboard.html with its own login gate.

@@ -135,7 +135,7 @@ async function initSchema() {
       username TEXT NOT NULL UNIQUE,
       email TEXT,
       password_hash TEXT NOT NULL,
-      role TEXT NOT NULL DEFAULT 'admin' CHECK (role IN ('super_admin','admin','host_member')),
+      role TEXT NOT NULL DEFAULT 'admin' CHECK (role IN ('super_admin','admin','host_member','media','transporter','driver')),
       status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected','disabled')),
       created_at TIMESTAMP DEFAULT NOW(),
       approved_at TIMESTAMP,
@@ -550,11 +550,23 @@ async function initSchema() {
   // Safe to run repeatedly — links a 'users' login to a host_members profile
   // once a host member is given their own account.
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS host_member_id INTEGER REFERENCES host_members(id);`);
-  // Older databases created before 'host_member' was added to the CHECK
-  // constraint need it relaxed, since Postgres won't alter CHECK constraints
-  // in place — drop and recreate.
+
+  // "Other Logins": restricted-scope accounts for people who aren't congress
+  // staff — a designer (media), a transport vendor's coordinator
+  // (transporter, linked to their partner record), or an individual driver
+  // (linked to their own drivers record). Each gets its own tiny self-service
+  // portal (media.html/transporter.html/driver.html) that only shows what's
+  // relevant to them — see server/routes/driverPortal.js and
+  // transporterPortal.js, same self-scoping pattern as host.js.
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS driver_id INTEGER REFERENCES drivers(id) ON DELETE SET NULL;`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS partner_id INTEGER REFERENCES partners(id) ON DELETE SET NULL;`);
+
+  // Older databases created before 'host_member' (and now 'media'/
+  // 'transporter'/'driver') were added to the CHECK constraint need it
+  // relaxed, since Postgres won't alter CHECK constraints in place — drop
+  // and recreate.
   await pool.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;`);
-  await pool.query(`ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('super_admin','admin','host_member'));`);
+  await pool.query(`ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('super_admin','admin','host_member','media','transporter','driver'));`);
 
   // Older databases created before 'congress_only' was added to reg_type need
   // the CHECK constraint relaxed (Postgres won't alter CHECK constraints in
