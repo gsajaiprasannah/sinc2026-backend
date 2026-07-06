@@ -1,107 +1,19 @@
 const express = require('express');
 const multer = require('multer');
 const path = require('path');
-const fs = require('fs');
 const db = require('../db');
+const { R2_ENABLED, saveFile, deleteStoredFile, s3Client, S3Cmds } = require('../uploadHelper');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 * 1024 } });
 
-const UPLOAD_ROOT = path.join(__dirname, '..', '..', 'public', 'uploads');
+console.log(R2_ENABLED
+  ? 'Media storage: Cloudflare R2 (bucket: ' + process.env.R2_BUCKET + ')'
+  : 'Media storage: local disk (public/uploads) — set R2_* env vars to switch to Cloudflare R2');
 
-// If Cloudflare R2 (or any S3-compatible bucket) is configured via env vars,
-// uploaded videos/posters go there instead of the server's local disk — durable,
-// not tied to a single instance, and not wiped on redeploy.
-const R2_ENABLED = !!(
-  process.env.R2_ACCOUNT_ID &&
-  process.env.R2_ACCESS_KEY_ID &&
-  process.env.R2_SECRET_ACCESS_KEY &&
-  process.env.R2_BUCKET &&
-  process.env.R2_PUBLIC_URL_BASE
-);
-
-let s3Client = null;
-let S3Cmds = null;
-if (R2_ENABLED) {
-  const { S3Client, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
-  S3Cmds = { PutObjectCommand, DeleteObjectCommand, HeadObjectCommand, GetObjectCommand };
-  s3Client = new S3Client({
-    region: 'auto',
-    endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-    credentials: {
-      accessKeyId: process.env.R2_ACCESS_KEY_ID,
-      secretAccessKey: process.env.R2_SECRET_ACCESS_KEY
-    }
-  });
-  console.log('Media storage: Cloudflare R2 (bucket: ' + process.env.R2_BUCKET + ')');
-} else {
-  console.log('Media storage: local disk (public/uploads) — set R2_* env vars to switch to Cloudflare R2');
-}
-
-function safeName(original) {
-  return original.replace(/[^a-zA-Z0-9.\-_]/g, '_');
-}
-
-// Saves the uploaded file and returns the path/URL to store in the DB.
-// R2 path returns an absolute https:// URL; local disk returns a relative
-// /uploads/... path — the frontend's mediaUrl() helper already handles both.
-//
-// IMPORTANT: after the R2 write we re-read the object's metadata (HeadObject)
-// and confirm its size matches what we tried to upload. This catches the
-// class of bug where a flaky connection truncates the upload partway —
-// without this check, a broken/incomplete file could get written to R2 (or
-// simply never make it) while still looking "successful" to the caller,
-// leaving a database row that points at a corrupt or missing file. Better to
-// fail loudly here than silently create a broken media entry.
-async function saveFile(file, sub) {
-  if (!file.buffer || file.buffer.length === 0) {
-    throw new Error('The uploaded file came through empty (0 bytes) — likely an interrupted upload. Please try again.');
-  }
-
-  const ts = Date.now();
-  const key = `${sub}/${ts}-${safeName(file.originalname)}`;
-
-  if (R2_ENABLED) {
-    await s3Client.send(new S3Cmds.PutObjectCommand({
-      Bucket: process.env.R2_BUCKET,
-      Key: key,
-      Body: file.buffer,
-      ContentType: file.mimetype
-    }));
-
-    // Verify the object actually landed intact before we tell the caller (and
-    // the database) that this upload succeeded.
-    const head = await s3Client.send(new S3Cmds.HeadObjectCommand({ Bucket: process.env.R2_BUCKET, Key: key }));
-    if (Number(head.ContentLength) !== file.buffer.length) {
-      // Clean up the bad object so it doesn't linger as orphaned storage.
-      await s3Client.send(new S3Cmds.DeleteObjectCommand({ Bucket: process.env.R2_BUCKET, Key: key })).catch(() => {});
-      throw new Error(`Upload verification failed — expected ${file.buffer.length} bytes but R2 stored ${head.ContentLength}. Please try again (this usually means the network connection dropped mid-upload).`);
-    }
-
-    return `${process.env.R2_PUBLIC_URL_BASE.replace(/\/$/, '')}/${key}`;
-  }
-
-  const dir = path.join(UPLOAD_ROOT, sub);
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, `${ts}-${safeName(file.originalname)}`), file.buffer);
-  return `/uploads/${sub}/${ts}-${safeName(file.originalname)}`;
-}
-
-async function deleteStoredFile(storedPath) {
-  if (R2_ENABLED && /^https?:\/\//.test(storedPath)) {
-    const key = storedPath.replace(process.env.R2_PUBLIC_URL_BASE.replace(/\/$/, '') + '/', '');
-    try {
-      await s3Client.send(new S3Cmds.DeleteObjectCommand({ Bucket: process.env.R2_BUCKET, Key: key }));
-    } catch (e) {
-      console.error('Failed to delete R2 object', key, e.message);
-    }
-    return;
-  }
-  if (storedPath && storedPath.startsWith('/uploads/')) {
-    const filePath = path.join(__dirname, '..', '..', 'public', storedPath);
-    fs.unlink(filePath, () => {});
-  }
-}
+// saveFile()/deleteStoredFile() now live in server/uploadHelper.js, shared
+// with the sponsor-logo and speaker-photo uploads in sponsors.js/speakers.js
+// — see that file for the R2-vs-local-disk + upload-verification logic.
 
 router.get('/', async (req, res) => {
   try {

@@ -109,6 +109,11 @@ app.use('/api', (req, res, next) => {
 app.use('/api/media', require('./routes/media'));
 app.use('/api/itinerary', require('./routes/itinerary'));
 app.use('/api/happenings', require('./routes/happenings'));
+// Narrow, public-safe views of sponsors/speakers (name + logo/photo + tier/
+// topic only — no phone/email/notes) for the homepage's Sponsors/Speakers
+// sections. The full /api/sponsors and /api/speakers routes below (with
+// contact details, checklists, etc.) stay admin-only.
+app.use('/api/public', require('./routes/publicDirectory'));
 
 app.get('/api/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 

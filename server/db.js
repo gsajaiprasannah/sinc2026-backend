@@ -380,6 +380,7 @@ async function initSchema() {
       guest_relation_host_member_id INTEGER REFERENCES host_members(id) ON DELETE SET NULL,
       status TEXT NOT NULL DEFAULT 'confirmed' CHECK (status IN ('lead','confirmed','cancelled')),
       notes TEXT,
+      logo_url TEXT,
       created_at TIMESTAMP DEFAULT NOW()
     );
 
@@ -396,6 +397,7 @@ async function initSchema() {
       guest_relation_host_member_id INTEGER REFERENCES host_members(id) ON DELETE SET NULL,
       status TEXT NOT NULL DEFAULT 'invited' CHECK (status IN ('invited','confirmed','cancelled')),
       notes TEXT,
+      photo_url TEXT,
       created_at TIMESTAMP DEFAULT NOW()
     );
 
@@ -643,6 +645,12 @@ async function initSchema() {
   // Safe now — responsible_committee_id is guaranteed to exist on every
   // database by this point (freshly created with it, or just backfilled above).
   await pool.query(`CREATE INDEX IF NOT EXISTS checklist_items_committee_idx ON checklist_items(responsible_committee_id);`);
+
+  // Sponsor logo + speaker photo, shown on the public homepage. Backfill for
+  // databases created before these columns existed. Stored the same way as
+  // media.filename (R2 https:// URL, or a relative /uploads/... path).
+  await pool.query(`ALTER TABLE sponsors ADD COLUMN IF NOT EXISTS logo_url TEXT;`);
+  await pool.query(`ALTER TABLE speakers ADD COLUMN IF NOT EXISTS photo_url TEXT;`);
 
   // One-time seed of the master checklist templates — only runs while the
   // table is still empty, so it never overwrites anything an admin has since

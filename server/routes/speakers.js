@@ -1,8 +1,11 @@
 const express = require('express');
+const multer = require('multer');
 const db = require('../db');
 const { attachChecklistRoutes, deleteChecklistForOwner } = require('./checklistHelper');
+const { saveFile, deleteStoredFile } = require('../uploadHelper');
 
 const router = express.Router();
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }); // photos: 10MB is plenty
 
 router.get('/', async (req, res) => {
   try {
@@ -69,9 +72,48 @@ router.put('/:id', async (req, res) => {
 });
 
 router.delete('/:id', async (req, res) => {
+  const row = await db.get('SELECT photo_url FROM speakers WHERE id=$1', [req.params.id]);
+  if (row) await deleteStoredFile(row.photo_url);
   await deleteChecklistForOwner('speaker', req.params.id);
   await db.run('DELETE FROM speakers WHERE id=$1', [req.params.id]);
   res.json({ ok: true });
+});
+
+// Speaker photo — shown on the public homepage next to the speaker's name.
+// Replaces any existing photo (old file is deleted so storage doesn't leak).
+router.post('/:id/photo', (req, res, next) => {
+  upload.single('file')(req, res, (err) => {
+    if (err) {
+      const friendly = err.code === 'LIMIT_FILE_SIZE' ? 'Photo is too large (max 10MB).' : 'Upload was interrupted — please try again.';
+      return res.status(400).json({ error: friendly });
+    }
+    next();
+  });
+}, async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'file is required' });
+  try {
+    const existing = await db.get('SELECT photo_url FROM speakers WHERE id=$1', [req.params.id]);
+    if (!existing) return res.status(404).json({ error: 'Speaker not found' });
+    const storedPath = await saveFile(req.file, 'speaker-photos');
+    await db.run('UPDATE speakers SET photo_url=$1 WHERE id=$2', [storedPath, req.params.id]);
+    if (existing.photo_url) await deleteStoredFile(existing.photo_url);
+    res.json({ photo_url: storedPath });
+  } catch (e) {
+    console.error('Speaker photo upload failed —', e.message);
+    res.status(500).json({ error: 'Upload failed: ' + e.message });
+  }
+});
+
+router.delete('/:id/photo', async (req, res) => {
+  try {
+    const existing = await db.get('SELECT photo_url FROM speakers WHERE id=$1', [req.params.id]);
+    if (!existing) return res.status(404).json({ error: 'Speaker not found' });
+    await db.run('UPDATE speakers SET photo_url=NULL WHERE id=$1', [req.params.id]);
+    if (existing.photo_url) await deleteStoredFile(existing.photo_url);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 
 attachChecklistRoutes(router, 'speaker');

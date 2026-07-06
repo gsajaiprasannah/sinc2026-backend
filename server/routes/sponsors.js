@@ -1,8 +1,11 @@
 const express = require('express');
+const multer = require('multer');
 const db = require('../db');
 const { attachChecklistRoutes, deleteChecklistForOwner } = require('./checklistHelper');
+const { saveFile, deleteStoredFile } = require('../uploadHelper');
 
 const router = express.Router();
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }); // logos: 10MB is plenty
 
 // Sponsor pass identifiers: SP-0001, SP-0002, ... — same advisory-lock
 // pattern as vehicle codes, so two concurrent submits can't collide.
@@ -96,9 +99,48 @@ router.put('/:id', async (req, res) => {
 });
 
 router.delete('/:id', async (req, res) => {
+  const row = await db.get('SELECT logo_url FROM sponsors WHERE id=$1', [req.params.id]);
+  if (row) await deleteStoredFile(row.logo_url);
   await deleteChecklistForOwner('sponsor', req.params.id);
   await db.run('DELETE FROM sponsors WHERE id=$1', [req.params.id]);
   res.json({ ok: true });
+});
+
+// Sponsor logo — shown on the public homepage next to the sponsor's name.
+// Replaces any existing logo (old file is deleted so storage doesn't leak).
+router.post('/:id/logo', (req, res, next) => {
+  upload.single('file')(req, res, (err) => {
+    if (err) {
+      const friendly = err.code === 'LIMIT_FILE_SIZE' ? 'Logo image is too large (max 10MB).' : 'Upload was interrupted — please try again.';
+      return res.status(400).json({ error: friendly });
+    }
+    next();
+  });
+}, async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'file is required' });
+  try {
+    const existing = await db.get('SELECT logo_url FROM sponsors WHERE id=$1', [req.params.id]);
+    if (!existing) return res.status(404).json({ error: 'Sponsor not found' });
+    const storedPath = await saveFile(req.file, 'sponsor-logos');
+    await db.run('UPDATE sponsors SET logo_url=$1 WHERE id=$2', [storedPath, req.params.id]);
+    if (existing.logo_url) await deleteStoredFile(existing.logo_url);
+    res.json({ logo_url: storedPath });
+  } catch (e) {
+    console.error('Sponsor logo upload failed —', e.message);
+    res.status(500).json({ error: 'Upload failed: ' + e.message });
+  }
+});
+
+router.delete('/:id/logo', async (req, res) => {
+  try {
+    const existing = await db.get('SELECT logo_url FROM sponsors WHERE id=$1', [req.params.id]);
+    if (!existing) return res.status(404).json({ error: 'Sponsor not found' });
+    await db.run('UPDATE sponsors SET logo_url=NULL WHERE id=$1', [req.params.id]);
+    if (existing.logo_url) await deleteStoredFile(existing.logo_url);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 
 attachChecklistRoutes(router, 'sponsor');
