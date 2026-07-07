@@ -1,5 +1,6 @@
 const express = require('express');
 const db = require('../db');
+const push = require('../pushHelper');
 
 const router = express.Router();
 
@@ -145,6 +146,21 @@ router.post('/:id/tasks', async (req, res) => {
       `, [task.id, req.params.id]);
       return task;
     });
+    // Nudge any committee member who has their own login — a no-op for
+    // members without one, or without push enabled.
+    db.all(`
+      SELECT u.id FROM committee_members cm JOIN users u ON u.host_member_id = cm.host_member_id
+      WHERE cm.committee_id = $1
+    `, [req.params.id]).then((rows) => {
+      const userIds = rows.map((r) => r.id);
+      if (userIds.length) {
+        push.sendToUsers(userIds, {
+          title: 'New checklist item assigned',
+          body: `${title.trim()}${due_date ? ' — due ' + due_date : ''}`,
+          url: 'login.html'
+        }).catch((e) => console.error('committee task push failed', e.message));
+      }
+    }).catch((e) => console.error('committee task push lookup failed', e.message));
     res.json({ id: result.id });
   } catch (e) {
     res.status(400).json({ error: e.message });

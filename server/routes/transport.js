@@ -1,7 +1,22 @@
 const express = require('express');
 const db = require('../db');
+const push = require('../pushHelper');
 
 const router = express.Router();
+
+// Notify a driver's linked login (if any) that they've got a new/updated
+// trip assignment — a no-op if that driver has no user account or hasn't
+// enabled push. Same helper used by the transporter self-service route.
+async function notifyDriverAssigned(driverId, trip) {
+  if (!driverId) return;
+  const u = await db.get('SELECT id FROM users WHERE driver_id=$1', [driverId]);
+  if (!u) return;
+  push.sendToUser(u.id, {
+    title: 'New trip assigned',
+    body: `${trip.from_location} → ${trip.to_location}${trip.trip_date ? ' on ' + trip.trip_date : ''}${trip.depart_time ? ' at ' + trip.depart_time : ''}`,
+    url: 'login.html'
+  }).catch((e) => console.error('notifyDriverAssigned failed', e.message));
+}
 
 // Every trip is joined with vehicle/driver context and a passenger count
 // (vs. the vehicle's seating capacity) so the planning table is useful
@@ -69,6 +84,9 @@ router.post('/', async (req, res) => {
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id
     `, [pre_tour_id || null, trip_date || null, depart_time || '', from_location, to_location,
         purpose || '', vehicle_id || null, driver_id || null, status || 'planned', notes || '']);
+    if (driver_id) {
+      notifyDriverAssigned(driver_id, { from_location, to_location, trip_date, depart_time });
+    }
     res.json({ id: result.id });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -78,6 +96,7 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   const { trip_date, depart_time, from_location, to_location, purpose, vehicle_id, driver_id, status, notes } = req.body;
   try {
+    const before = await db.get('SELECT driver_id FROM transport_trips WHERE id=$1', [req.params.id]);
     await db.run(`
       UPDATE transport_trips SET
         trip_date=COALESCE($1,trip_date), depart_time=COALESCE($2,depart_time),
@@ -89,6 +108,10 @@ router.put('/:id', async (req, res) => {
         from_location || null, to_location || null, purpose !== undefined ? purpose : null,
         vehicle_id || null, driver_id || null, status || null,
         notes !== undefined ? notes : null, req.params.id]);
+    if (driver_id && before && String(driver_id) !== String(before.driver_id)) {
+      const updated = await db.get('SELECT * FROM transport_trips WHERE id=$1', [req.params.id]);
+      notifyDriverAssigned(driver_id, updated);
+    }
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });

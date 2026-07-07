@@ -34,6 +34,11 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 // --- Auth routes (signup/login are public; user-management is self-gated inside) ---
 app.use('/api/auth', require('./routes/auth'));
 
+// --- Push notification subscriptions — self-gated inside (any logged-in
+// role can subscribe/unsubscribe their own browser; only admin/super_admin
+// can broadcast). Mounted early/unwrapped, same pattern as /api/host. ---
+app.use('/api/push', require('./routes/push'));
+
 // --- Only a super admin may delete anything, across every resource (clubs, ---
 // --- registrations, participants, media, happenings, logins). A regular   ---
 // --- admin can still create/edit records, just not permanently remove     ---
@@ -169,6 +174,7 @@ async function bootstrapSuperAdmin() {
 }
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 async function start() {
   try {
@@ -188,6 +194,17 @@ async function start() {
         runBackup().catch((e) => console.error('Scheduled backup failed', e.message));
       }, WEEK_MS);
     }, 60 * 1000); // wait a minute after boot before the first run
+
+    // Daily push reminder sweep for checklist/committee-task due dates — a
+    // no-op until VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY are configured (see
+    // server/pushHelper.js).
+    const { runDueDateReminders } = require('./pushScheduler');
+    setTimeout(() => {
+      runDueDateReminders().catch((e) => console.error('Startup push reminder sweep failed', e.message));
+      setInterval(() => {
+        runDueDateReminders().catch((e) => console.error('Scheduled push reminder sweep failed', e.message));
+      }, DAY_MS);
+    }, 90 * 1000); // stagger slightly after the backup timer above
   } catch (e) {
     console.error('Failed to start server — could not initialize database schema:', e);
     process.exit(1);

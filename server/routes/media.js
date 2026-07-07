@@ -3,6 +3,7 @@ const multer = require('multer');
 const path = require('path');
 const db = require('../db');
 const { R2_ENABLED, saveFile, deleteStoredFile, s3Client, S3Cmds } = require('../uploadHelper');
+const push = require('../pushHelper');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 * 1024 } });
@@ -92,6 +93,14 @@ router.post('/upload', (req, res, next) => {
       'INSERT INTO media (type, filename, original_name, title, active, sort_order) VALUES ($1,$2,$3,$4,1,$5) RETURNING id',
       [type, storedPath, req.file.originalname, req.body.title || req.file.originalname, Number(req.body.sort_order) || 0]
     );
+    // "New upload alert" — nudge admin/super_admin/host_member logins that
+    // there's fresh content on the public homepage's video reel/posters.
+    const label = req.body.title || req.file.originalname;
+    push.sendToRoles(['admin', 'super_admin', 'host_member'], {
+      title: `New ${type} uploaded`,
+      body: label,
+      url: 'index.html'
+    }).catch((e) => console.error('media upload push failed', e.message));
     res.json({ id: result.id, path: storedPath });
   } catch (e) {
     console.error('Media upload failed —', e.message);

@@ -7,8 +7,23 @@
 const express = require('express');
 const db = require('../db');
 const { requireAuth } = require('../auth');
+const push = require('../pushHelper');
 
 const router = express.Router();
+
+// Notify a driver's linked login (if they have one) that they've got a new
+// trip assignment — a no-op if that driver has no user account, or if the
+// linked user hasn't enabled push on any browser.
+async function notifyDriverAssigned(driverId, trip) {
+  if (!driverId) return;
+  const u = await db.get('SELECT id FROM users WHERE driver_id=$1', [driverId]);
+  if (!u) return;
+  await push.sendToUser(u.id, {
+    title: 'New trip assigned',
+    body: `${trip.from_location} → ${trip.to_location}${trip.trip_date ? ' on ' + trip.trip_date : ''}${trip.depart_time ? ' at ' + trip.depart_time : ''}`,
+    url: 'login.html'
+  });
+}
 
 async function myPartnerId(req) {
   const row = await db.get('SELECT partner_id FROM users WHERE id=$1', [req.user.id]);
@@ -72,7 +87,7 @@ router.get('/me', requireTransporterRole, async (req, res) => {
 router.put('/trips/:id/assign-driver', requireTransporterRole, async (req, res) => {
   try {
     const trip = await db.get(`
-      SELECT t.id FROM transport_trips t
+      SELECT t.* FROM transport_trips t
       ${TRIP_SCOPE_JOIN}
       WHERE t.id = $2 AND ${TRIP_SCOPE_WHERE}
     `, [req.partnerId, req.params.id]);
@@ -83,6 +98,9 @@ router.put('/trips/:id/assign-driver', requireTransporterRole, async (req, res) 
       if (!ownDriver) return res.status(403).json({ error: 'That driver is not one of your own drivers.' });
     }
     await db.run('UPDATE transport_trips SET driver_id=$1, updated_at=NOW() WHERE id=$2', [driver_id || null, req.params.id]);
+    if (driver_id && String(driver_id) !== String(trip.driver_id)) {
+      notifyDriverAssigned(driver_id, trip).catch((e) => console.error('notifyDriverAssigned failed', e.message));
+    }
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });

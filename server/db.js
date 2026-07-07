@@ -545,6 +545,23 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS inventory_distributions_item_idx ON inventory_distributions(inventory_item_id);
     CREATE INDEX IF NOT EXISTS inventory_distributions_recipient_idx ON inventory_distributions(recipient_type, recipient_id);
     CREATE INDEX IF NOT EXISTS inventory_distributions_assigned_idx ON inventory_distributions(assigned_host_member_id);
+
+    -- Web Push subscriptions (PWA push notifications) — one row per
+    -- browser/device a logged-in user has "enabled notifications" on. A
+    -- person can have more than one (phone + laptop), so this is keyed by
+    -- the push endpoint URL itself (unique per browser subscription), not
+    -- by user alone. Deleted automatically if the push service reports the
+    -- endpoint as gone (see server/pushHelper.js).
+    CREATE TABLE IF NOT EXISTS push_subscriptions (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      endpoint TEXT NOT NULL UNIQUE,
+      p256dh TEXT NOT NULL,
+      auth TEXT NOT NULL,
+      user_agent TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS push_subscriptions_user_idx ON push_subscriptions(user_id);
   `);
 
   // Safe to run repeatedly — links a 'users' login to a host_members profile
