@@ -99,4 +99,67 @@ router.get('/dietary', async (req, res) => {
   }
 });
 
+// Cross-module "complete picture" rollup for the merged dashboard: host team
+// + payments, transport (partners/drivers/vehicles), accommodation, and the
+// guest-relation entities (sponsors/speakers/guest visitors), plus a few
+// extras (committees, inventory, transport trips, pre-tours) so the whole
+// congress operation is visible from one screen.
+router.get('/ops-overview', async (req, res) => {
+  try {
+    const hostTotal = (await db.get('SELECT COUNT(*) AS n FROM host_members')).n;
+    const hostPaid = (await db.get("SELECT COUNT(*) AS n FROM host_members WHERE payment_status='paid'")).n;
+    const hostPartial = (await db.get("SELECT COUNT(*) AS n FROM host_members WHERE payment_status='partial'")).n;
+    const hostPending = (await db.get("SELECT COUNT(*) AS n FROM host_members WHERE payment_status='pending'")).n;
+    const hostExpected = (await db.get('SELECT COALESCE(SUM(payment_amount),0) AS n FROM host_members')).n;
+    const hostCollected = (await db.get("SELECT COALESCE(SUM(payment_amount),0) AS n FROM host_members WHERE payment_status='paid'")).n;
+    const hostPendingAmount = (await db.get("SELECT COALESCE(SUM(payment_amount),0) AS n FROM host_members WHERE payment_status<>'paid'")).n;
+
+    const transporters = (await db.get('SELECT COUNT(*) AS n FROM partners')).n;
+    const drivers = (await db.get('SELECT COUNT(*) AS n FROM drivers')).n;
+    const vehicles = (await db.get('SELECT COUNT(*) AS n FROM vehicles')).n;
+
+    const hotels = (await db.get('SELECT COUNT(*) AS n FROM hotels')).n;
+    const roomsAssigned = (await db.get("SELECT COUNT(DISTINCT hotel_id || '-' || room_number) AS n FROM room_assignments")).n;
+    const occupantsAssigned = (await db.get('SELECT COUNT(*) AS n FROM room_assignments')).n;
+
+    const sponsors = (await db.get('SELECT COUNT(*) AS n FROM sponsors')).n;
+    const speakers = (await db.get('SELECT COUNT(*) AS n FROM speakers')).n;
+    const guestVisitors = (await db.get('SELECT COUNT(*) AS n FROM guest_visitors')).n;
+    const committees = (await db.get('SELECT COUNT(*) AS n FROM committees')).n;
+
+    const inventoryItems = (await db.get('SELECT COUNT(*) AS n FROM inventory_items')).n;
+    const inventoryProcured = (await db.get('SELECT COALESCE(SUM(quantity_procured),0) AS n FROM inventory_items')).n;
+    const inventoryDelivered = (await db.get("SELECT COUNT(*) AS n FROM inventory_distributions WHERE status='delivered'")).n;
+    const inventoryPending = (await db.get("SELECT COUNT(*) AS n FROM inventory_distributions WHERE status='pending'")).n;
+
+    const transportTrips = (await db.get('SELECT COUNT(*) AS n FROM transport_trips')).n;
+    const preTours = (await db.get('SELECT COUNT(*) AS n FROM pre_tours')).n;
+
+    res.json({
+      hostMembers: {
+        total: Number(hostTotal), paid: Number(hostPaid), partial: Number(hostPartial), pending: Number(hostPending),
+        expectedAmount: Number(hostExpected), collectedAmount: Number(hostCollected), pendingAmount: Number(hostPendingAmount)
+      },
+      transporters: Number(transporters),
+      drivers: Number(drivers),
+      vehicles: Number(vehicles),
+      hotels: Number(hotels),
+      roomsAssigned: Number(roomsAssigned),
+      occupantsAssigned: Number(occupantsAssigned),
+      sponsors: Number(sponsors),
+      speakers: Number(speakers),
+      guestVisitors: Number(guestVisitors),
+      committees: Number(committees),
+      inventory: {
+        items: Number(inventoryItems), procured: Number(inventoryProcured),
+        delivered: Number(inventoryDelivered), pending: Number(inventoryPending)
+      },
+      transportTrips: Number(transportTrips),
+      preTours: Number(preTours)
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 module.exports = router;
