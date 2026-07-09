@@ -39,6 +39,12 @@ app.use('/api/auth', require('./routes/auth'));
 // can broadcast). Mounted early/unwrapped, same pattern as /api/host. ---
 app.use('/api/push', require('./routes/push'));
 
+// --- Communications: one-way announcements (role/committee/individual) with
+// an optional attached action — self-gated inside (composing is admin-only;
+// the inbox + read/action-done endpoints are requireAuth for any role).
+// Mounted unwrapped, same pattern as /api/push and /api/host.
+app.use('/api/messages', require('./routes/messages'));
+
 // --- Only a super admin may delete anything, across every resource (clubs, ---
 // --- registrations, participants, media, happenings, logins). A regular   ---
 // --- admin can still create/edit records, just not permanently remove     ---

@@ -833,6 +833,45 @@ async function initSchema() {
     }
     console.log('Seeded default transport pickup/drop points (Airport, Railway Station, Bus Stand).');
   }
+
+  // --- Communications: one-way announcements with optional per-recipient ---
+  // action tracking. target_type says how recipients were chosen (kept for
+  // display/audit on the sent-history list); message_recipients is the
+  // resolved, concrete list actually used for delivery + the self-service
+  // inbox, so a later membership change (e.g. someone leaving a committee)
+  // never rewrites who already received a past message.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS messages (
+      id SERIAL PRIMARY KEY,
+      sender_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      title TEXT NOT NULL,
+      body TEXT NOT NULL DEFAULT '',
+      target_type TEXT NOT NULL CHECK (target_type IN ('role','committee','individual')),
+      target_roles TEXT[],
+      target_committee_id INTEGER REFERENCES committees(id) ON DELETE SET NULL,
+      action_label TEXT,
+      action_due_date DATE,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+  // Per-recipient row: drives the inbox, read tracking, and (if the message
+  // carried an action_label) per-person completion of that action. Separate
+  // from checklist_items — this covers every role (drivers/transporters/
+  // volunteers/media have no checklist_items owner_type), while host_member
+  // recipients ALSO get a mirrored checklist_items row so the action shows
+  // up in the checklist tab they already use daily (see messages.js).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS message_recipients (
+      id SERIAL PRIMARY KEY,
+      message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      read_at TIMESTAMP,
+      action_done_at TIMESTAMP,
+      mirrored_checklist_item_id INTEGER REFERENCES checklist_items(id) ON DELETE SET NULL,
+      UNIQUE(message_id, user_id)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS message_recipients_user_idx ON message_recipients(user_id);`);
 }
 
 module.exports = { pool, all, get, run, transaction, initSchema };
