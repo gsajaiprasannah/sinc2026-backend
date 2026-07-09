@@ -76,6 +76,32 @@ app.use('/api/host', require('./routes/host'));
 app.use('/api/driver-portal', require('./routes/driverPortal'));
 app.use('/api/transporter-portal', require('./routes/transporterPortal'));
 
+// --- Committee-granted module access ---
+// Same route handlers as the admin-only mounts below, exposed a second time
+// under /api/portal-modules/<name> so a host member whose committee has been
+// granted that module (server/routes/committeeModuleAccess.js) can manage it
+// directly from their own portal — without going through an admin. Deletes
+// stay blocked regardless: the global "DELETE requires super_admin"
+// middleware above already runs in front of every /api route, this one
+// included.
+{
+  const { requireModuleAccess } = require('./routes/committeeModuleAccess');
+  app.use('/api/portal-modules/partners', requireModuleAccess('transport_partners'), require('./routes/partners'));
+  app.use('/api/portal-modules/drivers', requireModuleAccess('transport_partners'), require('./routes/drivers'));
+  app.use('/api/portal-modules/vehicles', requireModuleAccess('vehicles'), require('./routes/vehicles'));
+  app.use('/api/portal-modules/transport', requireModuleAccess('transport_planning'), require('./routes/transport'));
+  app.use('/api/portal-modules/pretours', requireModuleAccess('pretours'), require('./routes/pretours'));
+  app.use('/api/portal-modules/hotels', requireModuleAccess('accommodation'), require('./routes/hotels'));
+  app.use('/api/portal-modules/rooms', requireModuleAccess('accommodation'), require('./routes/rooms'));
+  app.use('/api/portal-modules/inventory', requireModuleAccess('inventory'), require('./routes/inventory'));
+  app.use('/api/portal-modules/sponsors', requireModuleAccess('sponsors'), require('./routes/sponsors'));
+  app.use('/api/portal-modules/speakers', requireModuleAccess('speakers'), require('./routes/speakers'));
+  app.use('/api/portal-modules/guestvisitors', requireModuleAccess('guestvisitors'), require('./routes/guestvisitors'));
+  app.use('/api/portal-modules/media', requireModuleAccess('media'), require('./routes/media'));
+  app.use('/api/portal-modules/happenings', requireModuleAccess('happenings'), require('./routes/happenings'));
+  app.use('/api/portal-modules/itinerary', requireModuleAccess('itinerary'), require('./routes/itinerary'));
+}
+
 // --- Operations module: Transport Planning + Pre Tours. Same protection ---
 // level as the host club module above (internal logistics/personal data). ---
 app.use('/api/vehicles', requireAdminRole, require('./routes/vehicles'));

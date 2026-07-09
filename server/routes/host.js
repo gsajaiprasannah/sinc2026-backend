@@ -6,12 +6,22 @@
 const express = require('express');
 const db = require('../db');
 const { requireAuth } = require('../auth');
+const push = require('../pushHelper');
+const { grantedModulesForHostMember } = require('./committeeModuleAccess');
 
 const router = express.Router();
 
 async function myHostMemberId(req) {
   const row = await db.get('SELECT host_member_id FROM users WHERE id=$1', [req.user.id]);
   return row ? row.host_member_id : null;
+}
+
+async function isCommitteeLead(hostMemberId, committeeId) {
+  const row = await db.get(
+    'SELECT 1 AS ok FROM committee_members WHERE committee_id=$1 AND host_member_id=$2 AND is_lead=true',
+    [committeeId, hostMemberId]
+  );
+  return !!row;
 }
 
 function requireHostMember(req, res, next) {
@@ -33,7 +43,7 @@ router.get('/me', requireHostMember, async (req, res) => {
     const id = req.hostMemberId;
     const profile = await db.get('SELECT * FROM host_members WHERE id=$1', [id]);
     const committees = await db.all(`
-      SELECT c.id, c.name FROM committee_members cm
+      SELECT c.id, c.name, cm.is_lead FROM committee_members cm
       JOIN committees c ON c.id = cm.committee_id
       WHERE cm.host_member_id = $1
       ORDER BY c.sort_order, c.name
@@ -44,12 +54,14 @@ router.get('/me', requireHostMember, async (req, res) => {
     const committeeTaskRows = await db.all(`
       SELECT c.id AS committee_id, c.name AS committee_name, c.description AS committee_description,
         ct.id AS task_id, ct.title, ct.description AS task_description, ct.is_milestone, ct.due_date,
-        tc.id AS completion_id, tc.status AS my_status,
+        ct.assigned_to_host_member_id,
+        tc.id AS completion_id, tc.status AS my_status, tc.verified_at,
         (SELECT COUNT(*) FROM committee_task_completions x WHERE x.committee_task_id = ct.id) AS total_members,
-        (SELECT COUNT(*) FROM committee_task_completions x WHERE x.committee_task_id = ct.id AND x.status = 'done') AS done_count
+        (SELECT COUNT(*) FROM committee_task_completions x WHERE x.committee_task_id = ct.id AND x.status IN ('done','verified')) AS done_count
       FROM committee_members cm
       JOIN committees c ON c.id = cm.committee_id
       LEFT JOIN committee_tasks ct ON ct.committee_id = c.id
+        AND (ct.assigned_to_host_member_id IS NULL OR ct.assigned_to_host_member_id = $1)
       LEFT JOIN committee_task_completions tc ON tc.committee_task_id = ct.id AND tc.host_member_id = $1
       WHERE cm.host_member_id = $1
       ORDER BY c.sort_order, c.name, ct.is_milestone DESC, ct.due_date NULLS LAST, ct.created_at
@@ -63,11 +75,50 @@ router.get('/me', requireHostMember, async (req, res) => {
         committeeTaskMap.get(row.committee_id).tasks.push({
           id: row.task_id, title: row.title, description: row.task_description, is_milestone: row.is_milestone,
           due_date: row.due_date, completion_id: row.completion_id, my_status: row.my_status,
+          verified_at: row.verified_at, is_individually_assigned: !!row.assigned_to_host_member_id,
           total_members: Number(row.total_members), done_count: Number(row.done_count)
         });
       }
     }
     const committeeTasks = Array.from(committeeTaskMap.values());
+
+    // For any committee this member LEADS: the full member roster + every
+    // task with EVERY member's completion (not just their own), so the lead
+    // can assign individual checklist items and verify what members have
+    // marked done. Mirrors server/routes/committees.js's admin-side shape.
+    const leadCommitteeIds = committees.filter((c) => c.is_lead).map((c) => c.id);
+    let leadCommittees = [];
+    if (leadCommitteeIds.length) {
+      const rosterRows = await db.all(`
+        SELECT cm.committee_id, hm.id, hm.name FROM committee_members cm
+        JOIN host_members hm ON hm.id = cm.host_member_id
+        WHERE cm.committee_id = ANY($1::int[])
+        ORDER BY hm.name
+      `, [leadCommitteeIds]);
+      const taskRows = await db.all(`
+        SELECT ct.*,
+          COALESCE(
+            (SELECT json_agg(json_build_object('completion_id', tc.id, 'host_member_id', hm.id, 'name', hm.name, 'status', tc.status, 'verified_at', tc.verified_at) ORDER BY hm.name)
+             FROM committee_task_completions tc JOIN host_members hm ON hm.id = tc.host_member_id
+             WHERE tc.committee_task_id = ct.id),
+            '[]'
+          ) AS members
+        FROM committee_tasks ct
+        WHERE ct.committee_id = ANY($1::int[])
+        ORDER BY ct.is_milestone DESC, ct.due_date NULLS LAST, ct.created_at
+      `, [leadCommitteeIds]);
+      leadCommittees = leadCommitteeIds.map((cid) => {
+        const info = committees.find((c) => c.id === cid);
+        return {
+          id: cid,
+          name: info.name,
+          roster: rosterRows.filter((r) => r.committee_id === cid).map((r) => ({ id: r.id, name: r.name })),
+          tasks: taskRows.filter((t) => t.committee_id === cid)
+        };
+      });
+    }
+
+    const moduleAccess = await grantedModulesForHostMember(id);
     const assignments = await db.all(`
       SELECT da.id, da.role, da.status, da.notes, da.updated_at,
         p.id AS participant_id, p.name AS participant_name, p.participant_code,
@@ -181,7 +232,7 @@ router.get('/me', requireHostMember, async (req, res) => {
       }
       committeeDeliveries = Array.from(map.values());
     }
-    res.json({ profile, committees, committeeTasks, assignments, tasks, guestRelations, goodiesChecklist, committeeChecklists, committeeDeliveries });
+    res.json({ profile, committees, committeeTasks, leadCommittees, moduleAccess, assignments, tasks, guestRelations, goodiesChecklist, committeeChecklists, committeeDeliveries });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -325,6 +376,100 @@ router.put('/committee-tasks/:completionId', requireHostMember, async (req, res)
     await db.run(
       `UPDATE committee_task_completions SET status=$1, completed_at=CASE WHEN $1='done' THEN NOW() ELSE NULL END WHERE id=$2`,
       [status, req.params.completionId]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// --- Committee lead actions ---
+// A committee lead can delegate a checklist item/milestone to one specific
+// member of their own committee (rather than broadcasting it to everyone),
+// and can verify a member's self-marked "done" so it counts as truly
+// accomplished. Both are 403'd for anyone who isn't the lead of that
+// specific committee — leading one committee doesn't grant any authority
+// over another.
+router.post('/committees/:committeeId/tasks', requireHostMember, async (req, res) => {
+  try {
+    if (!(await isCommitteeLead(req.hostMemberId, req.params.committeeId))) {
+      return res.status(403).json({ error: 'Only this committee\'s lead can assign checklist items.' });
+    }
+    const { title, description, is_milestone, due_date, assigned_to_host_member_id } = req.body;
+    if (!title || !title.trim()) return res.status(400).json({ error: 'title is required' });
+    if (assigned_to_host_member_id) {
+      const onCommittee = await db.get(
+        'SELECT 1 FROM committee_members WHERE committee_id=$1 AND host_member_id=$2',
+        [req.params.committeeId, assigned_to_host_member_id]
+      );
+      if (!onCommittee) return res.status(400).json({ error: 'That person is not a member of this committee.' });
+    }
+    const result = await db.transaction(async (tx) => {
+      const task = await tx.run(`
+        INSERT INTO committee_tasks (committee_id, title, description, is_milestone, due_date, assigned_to_host_member_id)
+        VALUES ($1,$2,$3,$4,$5,$6) RETURNING id
+      `, [req.params.committeeId, title.trim(), description || '', is_milestone ? 1 : 0, due_date || null, assigned_to_host_member_id || null]);
+      if (assigned_to_host_member_id) {
+        await tx.run(
+          `INSERT INTO committee_task_completions (committee_task_id, host_member_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
+          [task.id, assigned_to_host_member_id]
+        );
+      } else {
+        await tx.run(`
+          INSERT INTO committee_task_completions (committee_task_id, host_member_id)
+          SELECT $1, cm.host_member_id FROM committee_members cm WHERE cm.committee_id = $2
+          ON CONFLICT DO NOTHING
+        `, [task.id, req.params.committeeId]);
+      }
+      return task;
+    });
+    const pushQuery = assigned_to_host_member_id
+      ? { sql: `SELECT u.id FROM users u WHERE u.host_member_id = $1`, params: [assigned_to_host_member_id] }
+      : { sql: `SELECT u.id FROM committee_members cm JOIN users u ON u.host_member_id = cm.host_member_id WHERE cm.committee_id = $1`, params: [req.params.committeeId] };
+    db.all(pushQuery.sql, pushQuery.params).then((rows) => {
+      const userIds = rows.map((r) => r.id);
+      if (userIds.length) {
+        push.sendToUsers(userIds, {
+          title: 'New checklist item assigned',
+          body: `${title.trim()}${due_date ? ' — due ' + due_date : ''}`,
+          url: 'login.html'
+        }).catch((e) => console.error('lead task push failed', e.message));
+      }
+    }).catch((e) => console.error('lead task push lookup failed', e.message));
+    res.json({ id: result.id });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// Verify (or un-verify, to correct a mistake) a member's completion —
+// lead-only, and only once the member has actually marked it 'done' first
+// (a lead can't verify something nobody has submitted yet).
+router.put('/committee-task-completions/:id/verify', requireHostMember, async (req, res) => {
+  try {
+    const completion = await db.get(`
+      SELECT tc.*, ct.committee_id FROM committee_task_completions tc
+      JOIN committee_tasks ct ON ct.id = tc.committee_task_id
+      WHERE tc.id = $1
+    `, [req.params.id]);
+    if (!completion) return res.status(404).json({ error: 'Checklist item not found.' });
+    if (!(await isCommitteeLead(req.hostMemberId, completion.committee_id))) {
+      return res.status(403).json({ error: 'Only this committee\'s lead can verify checklist items.' });
+    }
+    const { status } = req.body;
+    if (!['done', 'verified'].includes(status)) {
+      return res.status(400).json({ error: 'status must be done (un-verify) or verified' });
+    }
+    if (status === 'verified' && completion.status === 'pending') {
+      return res.status(400).json({ error: 'This member hasn\'t marked it done yet — ask them to complete it first.' });
+    }
+    await db.run(
+      `UPDATE committee_task_completions SET
+         status=$1,
+         verified_at=CASE WHEN $1='verified' THEN NOW() ELSE NULL END,
+         verified_by_host_member_id=CASE WHEN $1='verified' THEN $2::integer ELSE NULL END
+       WHERE id=$3`,
+      [status, req.hostMemberId, req.params.id]
     );
     res.json({ ok: true });
   } catch (e) {

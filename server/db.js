@@ -681,6 +681,40 @@ async function initSchema() {
   await pool.query(`ALTER TABLE sponsors ADD COLUMN IF NOT EXISTS logo_url TEXT;`);
   await pool.query(`ALTER TABLE speakers ADD COLUMN IF NOT EXISTS photo_url TEXT;`);
 
+  // --- Committee leads, individual task delegation, and verification ---
+  // A committee has one designated lead (enforced app-side in committees.js —
+  // setting a new lead clears the flag on any other member of that committee)
+  // who can assign a checklist item to one specific member instead of the
+  // whole committee, and who verifies a member's self-marked "done" before it
+  // counts as truly accomplished. assigned_to_host_member_id NULL preserves
+  // the original broadcast-to-everyone behavior for existing/older tasks.
+  await pool.query(`ALTER TABLE committee_members ADD COLUMN IF NOT EXISTS is_lead BOOLEAN NOT NULL DEFAULT false;`);
+  await pool.query(`ALTER TABLE committee_tasks ADD COLUMN IF NOT EXISTS assigned_to_host_member_id INTEGER REFERENCES host_members(id) ON DELETE SET NULL;`);
+  await pool.query(`ALTER TABLE committee_task_completions ADD COLUMN IF NOT EXISTS verified_at TIMESTAMP;`);
+  await pool.query(`ALTER TABLE committee_task_completions ADD COLUMN IF NOT EXISTS verified_by_host_member_id INTEGER REFERENCES host_members(id) ON DELETE SET NULL;`);
+  // 'verified' is new (a member marks 'done', the committee lead then
+  // verifies it) — Postgres won't alter a CHECK constraint in place, so drop
+  // and recreate, same pattern as users_role_check above.
+  await pool.query(`ALTER TABLE committee_task_completions DROP CONSTRAINT IF EXISTS committee_task_completions_status_check;`);
+  await pool.query(`ALTER TABLE committee_task_completions ADD CONSTRAINT committee_task_completions_status_check CHECK (status IN ('pending','done','verified'));`);
+
+  // --- Per-committee module access grants ---
+  // Which admin modules (Sponsors, Vehicles, Hotels, etc.) a committee's own
+  // members can manage directly from their host portal, without going
+  // through an admin. Granted per committee by an admin (Committees tab);
+  // module_key values are validated against MODULE_KEYS in
+  // server/routes/committeeModuleAccess.js, not constrained at the DB level
+  // so new modules can be added without a migration.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS committee_module_access (
+      id SERIAL PRIMARY KEY,
+      committee_id INTEGER NOT NULL REFERENCES committees(id) ON DELETE CASCADE,
+      module_key TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE(committee_id, module_key)
+    );
+  `);
+
   // One-time seed of the master checklist templates — only runs while the
   // table is still empty, so it never overwrites anything an admin has since
   // added, edited, or deleted from the Checklists & Milestones tab. These
