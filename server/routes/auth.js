@@ -189,6 +189,27 @@ router.put('/users/:id', requireSuperAdmin, async (req, res) => {
   }
 });
 
+// Forgot-password recovery: a super admin can set a brand-new password for
+// ANY login (regular admin, host member, media, transporter, driver) without
+// needing to know the old one — unlike PUT /me/password above, which is
+// self-service and always requires the current password. This is the path
+// for "I forgot my password" support requests.
+router.put('/users/:id/reset-password', requireSuperAdmin, async (req, res) => {
+  const { new_password } = req.body;
+  if (!new_password || String(new_password).length < 6) {
+    return res.status(400).json({ error: 'New password must be at least 6 characters.' });
+  }
+  try {
+    const user = await db.get('SELECT id FROM users WHERE id=$1', [req.params.id]);
+    if (!user) return res.status(404).json({ error: 'Login not found.' });
+    const hash = await hashPassword(new_password);
+    await db.run('UPDATE users SET password_hash=$1 WHERE id=$2', [hash, req.params.id]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
 router.delete('/users/:id', requireSuperAdmin, async (req, res) => {
   if (Number(req.params.id) === Number(req.user.id)) {
     return res.status(400).json({ error: "You can't delete your own account." });
