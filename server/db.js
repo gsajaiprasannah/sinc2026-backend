@@ -896,6 +896,16 @@ async function initSchema() {
   await pool.query(`CREATE INDEX IF NOT EXISTS activity_log_created_idx ON activity_log(created_at DESC);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS activity_log_user_idx ON activity_log(user_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS activity_log_entity_idx ON activity_log(entity_type);`);
+
+  // --- Leadership Briefing: office-bearers (President, Secretary, VPs,
+  // Congress Chairman/Secretary, Treasurer, Congress Joint Secretary,
+  // Congress Sponsor Chairman) are ordinary host_members, just tagged with
+  // a leadership_role. NULL means "not a leadership login" — a host_member
+  // with this set sees the extra read-only Leadership Briefing tab in the
+  // self-service portal (see server/routes/host.js's requireLeadershipHostMember).
+  // Free text (not an enum) so admins can add a new office later without a
+  // migration; the admin UI dropdown is the source of truth for the standard list.
+  await pool.query(`ALTER TABLE host_members ADD COLUMN IF NOT EXISTS leadership_role TEXT;`);
 }
 
 module.exports = { pool, all, get, run, transaction, initSchema };
