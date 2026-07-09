@@ -775,6 +775,32 @@ async function initSchema() {
     }
     console.log('Seeded default master checklist templates (Sponsors, Speakers, Guest Visitors, Delegates, Host Members).');
   }
+
+  // --- Transport pickup/drop points ---
+  // A small, shared master list of common pickup/drop locations (Airport,
+  // Railway Station, Bus Stand, plus anything an admin/committee types into
+  // a delegate's arrival point or a trip's From/To) — offered as autocomplete
+  // suggestions everywhere a location is typed (server/routes/transportPoints.js),
+  // instead of everyone retyping "Coimbatore Airport" from scratch every
+  // time. Case-insensitive uniqueness so "Coimbatore Airport" and
+  // "coimbatore airport" don't end up as two separate suggestions.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS transport_points (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS transport_points_name_lower_idx ON transport_points (LOWER(name));`);
+
+  const pointCount = await pool.query(`SELECT COUNT(*)::int AS n FROM transport_points`);
+  if (pointCount.rows[0].n === 0) {
+    const DEFAULT_POINTS = ['Coimbatore Airport', 'Coimbatore Railway Station', 'Coimbatore Bus Stand'];
+    for (const name of DEFAULT_POINTS) {
+      await pool.query(`INSERT INTO transport_points (name) VALUES ($1) ON CONFLICT (LOWER(name)) DO NOTHING`, [name]);
+    }
+    console.log('Seeded default transport pickup/drop points (Airport, Railway Station, Bus Stand).');
+  }
 }
 
 module.exports = { pool, all, get, run, transaction, initSchema };

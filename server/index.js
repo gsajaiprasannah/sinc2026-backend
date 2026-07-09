@@ -90,6 +90,7 @@ app.use('/api/transporter-portal', require('./routes/transporterPortal'));
   app.use('/api/portal-modules/drivers', requireModuleAccess('transport_partners'), require('./routes/drivers'));
   app.use('/api/portal-modules/vehicles', requireModuleAccess('vehicles'), require('./routes/vehicles'));
   app.use('/api/portal-modules/transport', requireModuleAccess('transport_planning'), require('./routes/transport'));
+  app.use('/api/portal-modules/transport-points', requireModuleAccess('transport_planning'), require('./routes/transportPoints'));
   app.use('/api/portal-modules/pretours', requireModuleAccess('pretours'), require('./routes/pretours'));
   app.use('/api/portal-modules/hotels', requireModuleAccess('accommodation'), require('./routes/hotels'));
   app.use('/api/portal-modules/rooms', requireModuleAccess('accommodation'), require('./routes/rooms'));
@@ -114,6 +115,7 @@ app.use('/api/transporter-portal', require('./routes/transporterPortal'));
 // level as the host club module above (internal logistics/personal data). ---
 app.use('/api/vehicles', requireAdminRole, require('./routes/vehicles'));
 app.use('/api/transport', requireAdminRole, require('./routes/transport'));
+app.use('/api/transport-points', requireAdminRole, require('./routes/transportPoints'));
 app.use('/api/pretours', requireAdminRole, require('./routes/pretours'));
 app.use('/api/hotels', requireAdminRole, require('./routes/hotels'));
 app.use('/api/rooms', requireAdminRole, require('./routes/rooms'));
