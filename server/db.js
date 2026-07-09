@@ -872,6 +872,30 @@ async function initSchema() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS message_recipients_user_idx ON message_recipients(user_id);`);
+
+  // --- Activity log: a system-wide audit trail. Every login and every ---
+  // create/update/delete across every module writes one row here, so a
+  // super admin can answer "who did what, when" as the user base grows.
+  // user_id is nullable + ON DELETE SET NULL so a deleted account's history
+  // survives (username/role are captured as plain text at write time too,
+  // so the trail still reads sensibly even after the user_id link is gone).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS activity_log (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      username TEXT,
+      role TEXT,
+      action TEXT NOT NULL,
+      entity_type TEXT,
+      entity_id INTEGER,
+      label TEXT,
+      details TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS activity_log_created_idx ON activity_log(created_at DESC);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS activity_log_user_idx ON activity_log(user_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS activity_log_entity_idx ON activity_log(entity_type);`);
 }
 
 module.exports = { pool, all, get, run, transaction, initSchema };

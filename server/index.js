@@ -148,6 +148,9 @@ app.use('/api/checklist-items', requireAdminRole, require('./routes/checklistHel
 // Milestones admin tab; this is what "quick add" suggestions are drawn from.
 app.use('/api/checklist-templates', requireAdminRole, require('./routes/checklistTemplates'));
 
+// --- Activity Log: super_admin only, read-only audit trail ---
+app.use('/api/activity-log', requireSuperAdmin, require('./routes/activityLog'));
+
 // --- Congress registration stats: admin/super_admin only ---
 // The stats dashboard now lives at dashboard.html with its own login gate.
 // clubs (raw club list, used by admin.html's Clubs tab) and stats (overview/
