@@ -26,7 +26,8 @@ const MODULE_KEYS = [
   { key: 'guestvisitors', label: 'Guest Visitors' },
   { key: 'media', label: 'Media (Video/Poster)' },
   { key: 'happenings', label: 'Live Happenings' },
-  { key: 'itinerary', label: 'Itinerary' }
+  { key: 'itinerary', label: 'Itinerary' },
+  { key: 'participants', label: 'Delegate Registrations' }
 ];
 const MODULE_KEY_SET = new Set(MODULE_KEYS.map((m) => m.key));
 

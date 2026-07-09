@@ -100,6 +100,14 @@ app.use('/api/transporter-portal', require('./routes/transporterPortal'));
   app.use('/api/portal-modules/media', requireModuleAccess('media'), require('./routes/media'));
   app.use('/api/portal-modules/happenings', requireModuleAccess('happenings'), require('./routes/happenings'));
   app.use('/api/portal-modules/itinerary', requireModuleAccess('itinerary'), require('./routes/itinerary'));
+  // Delegate registration data entry (for volunteers doing on-site/onboarding
+  // data entry) — clubs (so a club dropdown/quick-add is available), the
+  // registrations they belong to, and the delegates themselves. One module
+  // key ('participants') covers all three, same one-checkbox-many-routers
+  // pattern as transport_partners and accommodation above.
+  app.use('/api/portal-modules/clubs', requireModuleAccess('participants'), require('./routes/clubs'));
+  app.use('/api/portal-modules/registrations', requireModuleAccess('participants'), require('./routes/registrations'));
+  app.use('/api/portal-modules/participants', requireModuleAccess('participants'), require('./routes/participants'));
 }
 
 // --- Operations module: Transport Planning + Pre Tours. Same protection ---
