@@ -715,6 +715,17 @@ async function initSchema() {
     );
   `);
 
+  // --- A committee's own checklist ---
+  // 'committee' is a new valid owner_type — a committee's own shared to-do
+  // list (owner_id = the committee itself), separate from checklist items
+  // owned by a Sponsor/Speaker/Guest Visitor/Delegate/Host Member that this
+  // committee is merely responsible for delivering (responsible_committee_id
+  // on those rows, unrelated to this). Postgres won't alter a CHECK
+  // constraint in place, so drop and recreate, same pattern as
+  // users_role_check above.
+  await pool.query(`ALTER TABLE checklist_items DROP CONSTRAINT IF EXISTS checklist_items_owner_type_check;`);
+  await pool.query(`ALTER TABLE checklist_items ADD CONSTRAINT checklist_items_owner_type_check CHECK (owner_type IN ('sponsor','speaker','guest_visitor','participant','host_member','committee'));`);
+
   // One-time seed of the master checklist templates — only runs while the
   // table is still empty, so it never overwrites anything an admin has since
   // added, edited, or deleted from the Checklists & Milestones tab. These

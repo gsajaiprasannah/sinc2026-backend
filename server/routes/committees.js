@@ -2,6 +2,7 @@ const express = require('express');
 const db = require('../db');
 const push = require('../pushHelper');
 const { MODULE_KEYS, isValidModuleKey } = require('./committeeModuleAccess');
+const { attachChecklistRoutes } = require('./checklistHelper');
 
 const router = express.Router();
 
@@ -21,6 +22,7 @@ router.get('/', async (req, res) => {
           '[]'
         ) AS module_access,
         (SELECT COUNT(*) FROM committee_tasks ct WHERE ct.committee_id = c.id) AS task_count,
+        (SELECT COUNT(*) FROM checklist_items ci WHERE ci.owner_type = 'committee' AND ci.owner_id = c.id) AS checklist_item_count,
         -- A task counts as "completed" here once every member's completion
         -- has been verified by the committee lead (or admin) — not merely
         -- self-marked done — so this reflects true accomplishment.
@@ -296,5 +298,14 @@ router.put('/tasks/completions/:completionId', async (req, res) => {
     res.status(400).json({ error: e.message });
   }
 });
+
+// A committee's own checklist — separate from the per-member task
+// delegation above (committee_tasks), this is a simple shared to-do list
+// for the committee itself (e.g. "Confirm venue AV setup") using the same
+// generic checklist_items table every other entity (Sponsors, Speakers,
+// Host Members, ...) already uses. Gives admins GET/POST /:id/checklist;
+// edit/delete-by-id and status updates go through the shared
+// /api/checklist-items/:itemId endpoint like everywhere else.
+attachChecklistRoutes(router, 'committee');
 
 module.exports = router;

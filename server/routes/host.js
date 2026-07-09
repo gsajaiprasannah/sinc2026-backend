@@ -182,7 +182,8 @@ router.get('/me', requireHostMember, async (req, res) => {
     let committeeChecklists = [];
     if (committeeIds.length) {
       const rows = await db.all(`
-        SELECT ci.*, COALESCE(s.name, sp.name, gv.name, p.name, hm.name) AS owner_name, c.name AS committee_name,
+        SELECT ci.*, COALESCE(s.name, sp.name, gv.name, p.name, hm.name, oc.name) AS owner_name, c.name AS committee_name,
+          (ci.owner_type = 'committee') AS is_committee_own_item,
           (ci.status != 'done' AND ci.due_date IS NOT NULL AND ci.due_date < CURRENT_DATE) AS is_overdue
         FROM checklist_items ci
         LEFT JOIN sponsors s ON ci.owner_type='sponsor' AND ci.owner_id = s.id
@@ -190,6 +191,7 @@ router.get('/me', requireHostMember, async (req, res) => {
         LEFT JOIN guest_visitors gv ON ci.owner_type='guest_visitor' AND ci.owner_id = gv.id
         LEFT JOIN participants p ON ci.owner_type='participant' AND ci.owner_id = p.id
         LEFT JOIN host_members hm ON ci.owner_type='host_member' AND ci.owner_id = hm.id
+        LEFT JOIN committees oc ON ci.owner_type='committee' AND ci.owner_id = oc.id
         LEFT JOIN committees c ON c.id = ci.responsible_committee_id
         WHERE ci.responsible_committee_id = ANY($1::int[])
         ORDER BY is_overdue DESC, ci.due_date ASC NULLS LAST, ci.id
@@ -436,6 +438,33 @@ router.post('/committees/:committeeId/tasks', requireHostMember, async (req, res
         }).catch((e) => console.error('lead task push failed', e.message));
       }
     }).catch((e) => console.error('lead task push lookup failed', e.message));
+    res.json({ id: result.id });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// A committee lead adding to their own committee's shared checklist — a
+// simpler, single-status to-do list (e.g. "Confirm venue AV setup") that's
+// separate from the per-member task delegation above. Uses the same
+// generic checklist_items table every other entity (Sponsors, Speakers,
+// Host Members, ...) already uses, with owner_type='committee' and
+// responsible_committee_id set to the same committee, so any member can
+// then toggle its status via the existing PUT /host/checklist/:id route
+// (that route already allows this — see its responsible_committee_id
+// membership check above) without any further changes there.
+router.post('/committees/:committeeId/checklist-items', requireHostMember, async (req, res) => {
+  try {
+    if (!(await isCommitteeLead(req.hostMemberId, req.params.committeeId))) {
+      return res.status(403).json({ error: 'Only this committee\'s lead can add checklist items.' });
+    }
+    const { label, due_date, category, notes } = req.body;
+    if (!label || !label.trim()) return res.status(400).json({ error: 'label is required' });
+    const cid = req.params.committeeId;
+    const result = await db.run(`
+      INSERT INTO checklist_items (owner_type, owner_id, category, label, status, notes, responsible_committee_id, due_date)
+      VALUES ('committee', $1, $2, $3, 'pending', $4, $1, $5) RETURNING id
+    `, [cid, category || '', label.trim(), notes || '', due_date || null]);
     res.json({ id: result.id });
   } catch (e) {
     res.status(400).json({ error: e.message });
