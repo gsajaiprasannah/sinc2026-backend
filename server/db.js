@@ -726,6 +726,17 @@ async function initSchema() {
   await pool.query(`ALTER TABLE checklist_items DROP CONSTRAINT IF EXISTS checklist_items_owner_type_check;`);
   await pool.query(`ALTER TABLE checklist_items ADD CONSTRAINT checklist_items_owner_type_check CHECK (owner_type IN ('sponsor','speaker','guest_visitor','participant','host_member','committee'));`);
 
+  // --- Arrival/departure trip grouping ---
+  // 'general' preserves today's behavior for every existing trip (ad hoc
+  // congress transport, pre-tour transport). 'arrival'/'departure' mark
+  // trips created from the new "club delegates on the same flight/train"
+  // flow (server/routes/transport.js's /arrivals-queue, /departures-queue,
+  // /group-trip), so those queues know which delegates are already covered
+  // and don't suggest them again.
+  await pool.query(`ALTER TABLE transport_trips ADD COLUMN IF NOT EXISTS trip_type TEXT NOT NULL DEFAULT 'general';`);
+  await pool.query(`ALTER TABLE transport_trips DROP CONSTRAINT IF EXISTS transport_trips_trip_type_check;`);
+  await pool.query(`ALTER TABLE transport_trips ADD CONSTRAINT transport_trips_trip_type_check CHECK (trip_type IN ('arrival','departure','general'));`);
+
   // One-time seed of the master checklist templates — only runs while the
   // table is still empty, so it never overwrites anything an admin has since
   // added, edited, or deleted from the Checklists & Milestones tab. These

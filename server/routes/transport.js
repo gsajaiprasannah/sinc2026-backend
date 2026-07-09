@@ -48,6 +48,117 @@ router.get('/', async (req, res) => {
   }
 });
 
+// --- Arrival/departure grouping ---
+// Delegates who gave flight/train details but aren't on an arrival trip yet,
+// clustered by matching travel_number + travel_datetime (i.e. "same flight,
+// same landing time" = same pickup group) so the transport committee can
+// assign one bigger vehicle to the whole cluster instead of planning each
+// delegate one at a time. Each delegate's already-assigned hotel (if any) is
+// included so the destination can be pre-filled. Registered before /:id so
+// this literal path isn't swallowed as an id.
+router.get('/arrivals-queue', async (req, res) => {
+  try {
+    const rows = await db.all(`
+      SELECT p.travel_mode, p.travel_number, p.travel_datetime, p.arrival_point,
+        json_agg(json_build_object(
+          'id', p.id, 'name', p.name, 'phone', p.phone, 'participant_code', p.participant_code,
+          'club_name', c.name, 'reg_number', r.reg_number,
+          'hotel_id', ra.hotel_id, 'hotel_name', h.name
+        ) ORDER BY p.name) AS delegates,
+        COUNT(*)::int AS delegate_count
+      FROM participants p
+      LEFT JOIN clubs c ON c.id = p.club_id
+      LEFT JOIN registrations r ON r.id = p.registration_id
+      LEFT JOIN room_assignments ra ON ra.participant_id = p.id
+      LEFT JOIN hotels h ON h.id = ra.hotel_id
+      WHERE p.travel_mode IN ('flight','train')
+        AND p.travel_number IS NOT NULL AND p.travel_number <> ''
+        AND p.travel_datetime IS NOT NULL AND p.travel_datetime <> ''
+        AND NOT EXISTS (
+          SELECT 1 FROM transport_trip_passengers tp
+          JOIN transport_trips t ON t.id = tp.trip_id
+          WHERE tp.participant_id = p.id AND t.trip_type = 'arrival'
+        )
+      GROUP BY p.travel_mode, p.travel_number, p.travel_datetime, p.arrival_point
+      ORDER BY p.travel_datetime, p.travel_number
+    `);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Same idea in reverse — delegates with departure details not yet on a
+// departure trip. There's no separate "departure point" field on a
+// delegate (most people depart from the same airport/station they arrived
+// through), so arrival_point doubles as the shared terminal reference here.
+router.get('/departures-queue', async (req, res) => {
+  try {
+    const rows = await db.all(`
+      SELECT p.departure_mode AS travel_mode, p.departure_number AS travel_number,
+        p.departure_datetime AS travel_datetime, p.arrival_point,
+        json_agg(json_build_object(
+          'id', p.id, 'name', p.name, 'phone', p.phone, 'participant_code', p.participant_code,
+          'club_name', c.name, 'reg_number', r.reg_number,
+          'hotel_id', ra.hotel_id, 'hotel_name', h.name
+        ) ORDER BY p.name) AS delegates,
+        COUNT(*)::int AS delegate_count
+      FROM participants p
+      LEFT JOIN clubs c ON c.id = p.club_id
+      LEFT JOIN registrations r ON r.id = p.registration_id
+      LEFT JOIN room_assignments ra ON ra.participant_id = p.id
+      LEFT JOIN hotels h ON h.id = ra.hotel_id
+      WHERE p.departure_mode IN ('flight','train')
+        AND p.departure_number IS NOT NULL AND p.departure_number <> ''
+        AND p.departure_datetime IS NOT NULL AND p.departure_datetime <> ''
+        AND NOT EXISTS (
+          SELECT 1 FROM transport_trip_passengers tp
+          JOIN transport_trips t ON t.id = tp.trip_id
+          WHERE tp.participant_id = p.id AND t.trip_type = 'departure'
+        )
+      GROUP BY p.departure_mode, p.departure_number, p.departure_datetime, p.arrival_point
+      ORDER BY p.departure_datetime, p.departure_number
+    `);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Confirms a suggested group (or any hand-picked set of delegates) into a
+// real trip in one shot: creates the transport_trips row AND every
+// transport_trip_passengers row together, instead of the committee creating
+// the trip and then adding passengers one at a time via POST /:id/passengers.
+router.post('/group-trip', async (req, res) => {
+  const { direction, participant_ids, trip_date, depart_time, from_location, to_location, purpose, vehicle_id, driver_id, notes } = req.body;
+  if (!['arrival', 'departure'].includes(direction)) return res.status(400).json({ error: "direction must be 'arrival' or 'departure'" });
+  if (!Array.isArray(participant_ids) || !participant_ids.length) return res.status(400).json({ error: 'participant_ids array is required' });
+  if (!from_location || !to_location) return res.status(400).json({ error: 'from_location and to_location are required' });
+  try {
+    const tripId = await db.transaction(async (tx) => {
+      const trip = await tx.run(`
+        INSERT INTO transport_trips (trip_date, depart_time, from_location, to_location, purpose, vehicle_id, driver_id, status, notes, trip_type)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,'planned',$8,$9) RETURNING id
+      `, [trip_date || null, depart_time || '', from_location, to_location,
+          purpose || (direction === 'arrival' ? 'Airport/station pickup' : 'Airport/station drop-off'),
+          vehicle_id || null, driver_id || null, notes || '', direction]);
+      for (const pid of participant_ids) {
+        await tx.run(`
+          INSERT INTO transport_trip_passengers (trip_id, participant_id)
+          VALUES ($1,$2) ON CONFLICT DO NOTHING
+        `, [trip.id, pid]);
+      }
+      return trip.id;
+    });
+    if (driver_id) {
+      notifyDriverAssigned(driver_id, { from_location, to_location, trip_date, depart_time });
+    }
+    res.json({ id: tripId });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
 router.get('/:id', async (req, res) => {
   try {
     const trip = await db.get(`
