@@ -39,6 +39,22 @@ function requireHostMember(req, res, next) {
   });
 }
 
+// Same as requireHostMember, but additionally gates on the host_members row
+// having a non-null leadership_role — i.e. this person was tagged in the
+// admin panel as President/Secretary/VP/etc. Regular host members (the vast
+// majority) get a 403 rather than seeing the cross-organization Leadership
+// Briefing data.
+function requireLeadershipHostMember(req, res, next) {
+  requireHostMember(req, res, async () => {
+    const row = await db.get('SELECT leadership_role FROM host_members WHERE id=$1', [req.hostMemberId]);
+    if (!row || !row.leadership_role) {
+      return res.status(403).json({ error: 'This section is only available to designated leadership roles.' });
+    }
+    req.leadershipRole = row.leadership_role;
+    next();
+  });
+}
+
 router.get('/me', requireHostMember, async (req, res) => {
   try {
     const id = req.hostMemberId;
@@ -519,6 +535,158 @@ router.put('/committee-task-completions/:id/verify', requireHostMember, async (r
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
+  }
+});
+
+// --- Leadership Briefing ---
+// A one-screen "state of the congress" view for the small set of host
+// members tagged with a leadership_role (President, Secretary, VPs, the
+// Congress Chairman/Secretary/Joint Secretary/Treasurer/Sponsor Chairman).
+// Everything here is read-only aggregation, reusing the same SQL shapes as
+// the admin-only stats.js / deliveryMonitor.js / inventory.js monitor
+// endpoints — those routes sit behind requireAdminRole so they can't be
+// called directly from a host_member token, hence the duplication here
+// rather than a shared import.
+function humanizeActivity(row) {
+  const who = row.username || 'Someone';
+  const label = row.label ? `"${row.label}"` : '';
+  const entity = (row.entity_type || '').replace(/_/g, ' ');
+  const actionText = {
+    create: 'added', update: 'updated', delete: 'deleted', complete: 'completed',
+    deliver: 'delivered', verify: 'verified', send: 'sent', login: 'logged in',
+    bulk_create: 'bulk-imported'
+  }[row.action] || row.action;
+  if (row.action === 'login') return `${who} logged in`;
+  let sentence = `${who} ${actionText}`;
+  if (entity) sentence += ` a ${entity}`;
+  if (label) sentence += ` ${label}`;
+  if (row.details) sentence += ` (${row.details})`;
+  return sentence;
+}
+
+router.get('/leadership-briefing', requireLeadershipHostMember, async (req, res) => {
+  try {
+    // --- KPIs ---
+    const totalDelegates = Number((await db.get('SELECT COUNT(*) AS n FROM participants')).n);
+    const totalClubs = Number((await db.get('SELECT COUNT(*) AS n FROM clubs')).n);
+    const paymentsCollected = Number((await db.get('SELECT COALESCE(SUM(amount_paid),0) AS n FROM registrations')).n);
+    const paymentsDue = Number((await db.get('SELECT COALESCE(SUM(amount_due),0) AS n FROM registrations')).n);
+    const sponsorsTotal = Number((await db.get("SELECT COUNT(*) AS n FROM sponsors WHERE status != 'cancelled'")).n);
+    const sponsorsConfirmed = Number((await db.get("SELECT COUNT(*) AS n FROM sponsors WHERE status='confirmed'")).n);
+    const hostTeamTotal = Number((await db.get('SELECT COUNT(*) AS n FROM host_members')).n);
+    const hostTeamPaid = Number((await db.get("SELECT COUNT(*) AS n FROM host_members WHERE payment_status='paid'")).n);
+
+    // --- Checklist completion by committee (same shape as deliveryMonitor.js /monitor/summary) ---
+    const checklistByCommittee = await db.all(`
+      SELECT
+        c.id AS committee_id, COALESCE(c.name, 'Unassigned') AS committee_name,
+        COUNT(ci.id)::int AS total,
+        COUNT(*) FILTER (WHERE ci.status='done')::int AS done,
+        COUNT(*) FILTER (WHERE ci.status='in_progress')::int AS in_progress,
+        COUNT(*) FILTER (WHERE ci.status='pending')::int AS pending,
+        COUNT(*) FILTER (WHERE ci.status != 'done' AND ci.due_date IS NOT NULL AND ci.due_date < CURRENT_DATE)::int AS overdue
+      FROM checklist_items ci
+      LEFT JOIN committees c ON c.id = ci.responsible_committee_id
+      GROUP BY c.id, c.name
+      ORDER BY c.name IS NULL, c.name
+    `);
+    const checklistOverall = checklistByCommittee.reduce((acc, r) => {
+      acc.total += r.total; acc.done += r.done; acc.overdue += r.overdue;
+      return acc;
+    }, { total: 0, done: 0, overdue: 0 });
+
+    // --- Inventory/goodies procurement -> delivery funnel ---
+    // Items and their procured quantities are aggregated separately from
+    // distributions — joining the two and summing quantity_procured would
+    // multiply it by however many distribution rows each item has.
+    const itemTotals = await db.get(`SELECT COUNT(*)::int AS items, COALESCE(SUM(quantity_procured),0)::int AS procured FROM inventory_items`);
+    const distTotals = await db.get(`
+      SELECT
+        COUNT(*) FILTER (WHERE status='delivered')::int AS delivered,
+        COUNT(*) FILTER (WHERE status='pending')::int AS pending
+      FROM inventory_distributions
+    `);
+    const inventoryTotals = { items: itemTotals.items, procured: itemTotals.procured, delivered: distTotals.delivered, pending: distTotals.pending };
+    const inventoryByCommittee = await db.all(`
+      SELECT c.id AS committee_id, COALESCE(c.name, 'Unassigned') AS committee_name,
+        COUNT(d.id)::int AS total,
+        COUNT(*) FILTER (WHERE d.status='delivered')::int AS delivered,
+        COUNT(*) FILTER (WHERE d.status='pending')::int AS pending
+      FROM inventory_distributions d
+      JOIN inventory_items i ON i.id = d.inventory_item_id
+      LEFT JOIN committees c ON c.id = i.responsible_committee_id
+      WHERE d.status != 'cancelled'
+      GROUP BY c.id, c.name
+      ORDER BY c.name IS NULL, c.name
+    `);
+
+    // --- Needs attention ---
+    const overdueChecklist = await db.all(`
+      SELECT ci.id, ci.label, ci.due_date, ci.owner_type, ci.owner_id, c.name AS committee_name,
+        COALESCE(s.name, sp.name, gv.name, p.name, hm.name) AS owner_name
+      FROM checklist_items ci
+      LEFT JOIN committees c ON c.id = ci.responsible_committee_id
+      LEFT JOIN sponsors s ON ci.owner_type='sponsor' AND ci.owner_id = s.id
+      LEFT JOIN speakers sp ON ci.owner_type='speaker' AND ci.owner_id = sp.id
+      LEFT JOIN guest_visitors gv ON ci.owner_type='guest_visitor' AND ci.owner_id = gv.id
+      LEFT JOIN participants p ON ci.owner_type='participant' AND ci.owner_id = p.id
+      LEFT JOIN host_members hm ON ci.owner_type='host_member' AND ci.owner_id = hm.id
+      WHERE ci.status != 'done' AND ci.due_date IS NOT NULL AND ci.due_date < CURRENT_DATE
+      ORDER BY ci.due_date ASC
+      LIMIT 15
+    `);
+    const unconfirmedSponsors = await db.all(`
+      SELECT id, name, tier, status FROM sponsors WHERE status != 'confirmed' ORDER BY name LIMIT 15
+    `);
+    const undeliveredInventory = await db.all(`
+      SELECT d.id, i.name AS item_name, d.recipient_type,
+        COALESCE(rs.name, rsp.name, rgv.name, rp.name, rhm.name) AS recipient_name,
+        c.name AS committee_name, d.created_at
+      FROM inventory_distributions d
+      JOIN inventory_items i ON i.id = d.inventory_item_id
+      LEFT JOIN committees c ON c.id = i.responsible_committee_id
+      LEFT JOIN sponsors rs ON d.recipient_type='sponsor' AND d.recipient_id = rs.id
+      LEFT JOIN speakers rsp ON d.recipient_type='speaker' AND d.recipient_id = rsp.id
+      LEFT JOIN guest_visitors rgv ON d.recipient_type='guest_visitor' AND d.recipient_id = rgv.id
+      LEFT JOIN participants rp ON d.recipient_type='participant' AND d.recipient_id = rp.id
+      LEFT JOIN host_members rhm ON d.recipient_type='host_member' AND d.recipient_id = rhm.id
+      WHERE d.status='pending'
+      ORDER BY d.created_at ASC
+      LIMIT 15
+    `);
+
+    // --- Recent activity feed, in plain language ---
+    const activityRows = await db.all(`SELECT * FROM activity_log ORDER BY created_at DESC LIMIT 20`);
+    const activity = activityRows.map((r) => ({
+      created_at: r.created_at,
+      username: r.username,
+      role: r.role,
+      sentence: humanizeActivity(r)
+    }));
+
+    res.json({
+      role: req.leadershipRole,
+      kpis: {
+        totalDelegates, totalClubs,
+        paymentsCollected, paymentsDue,
+        paymentCollectionPct: (paymentsCollected + paymentsDue) > 0 ? Math.round((paymentsCollected / (paymentsCollected + paymentsDue)) * 100) : null,
+        sponsorsTotal, sponsorsConfirmed,
+        hostTeamTotal, hostTeamPaid
+      },
+      checklist: {
+        overallPct: checklistOverall.total > 0 ? Math.round((checklistOverall.done / checklistOverall.total) * 100) : null,
+        overallOverdue: checklistOverall.overdue,
+        byCommittee: checklistByCommittee.map((r) => ({ ...r, completion_pct: r.total > 0 ? Math.round((r.done / r.total) * 100) : null }))
+      },
+      inventory: {
+        ...inventoryTotals,
+        byCommittee: inventoryByCommittee.map((r) => ({ ...r, completion_pct: r.total > 0 ? Math.round((r.delivered / r.total) * 100) : null }))
+      },
+      needsAttention: { overdueChecklist, unconfirmedSponsors, undeliveredInventory },
+      activity
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 

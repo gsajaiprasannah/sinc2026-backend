@@ -73,7 +73,7 @@ router.get('/:id', async (req, res) => {
 });
 
 router.post('/', async (req, res) => {
-  const { name, email, phone, company, designation, category, payment_status, payment_amount, payment_date, payment_mode, notes, force } = req.body;
+  const { name, email, phone, company, designation, category, payment_status, payment_amount, payment_date, payment_mode, notes, leadership_role, force } = req.body;
   if (!name) return res.status(400).json({ error: 'name is required' });
   try {
     if (!force) {
@@ -87,10 +87,10 @@ router.post('/', async (req, res) => {
       }
     }
     const result = await db.run(`
-      INSERT INTO host_members (name, email, phone, company, designation, category, payment_status, payment_amount, payment_date, payment_mode, notes)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id
+      INSERT INTO host_members (name, email, phone, company, designation, category, payment_status, payment_amount, payment_date, payment_mode, notes, leadership_role)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id
     `, [name, email || '', phone || '', company || '', designation || '', category || '',
-        payment_status || 'pending', Number(payment_amount) || 5000, payment_date || null, payment_mode || '', notes || '']);
+        payment_status || 'pending', Number(payment_amount) || 5000, payment_date || null, payment_mode || '', notes || '', leadership_role || null]);
     logActivity(req.user, { action: 'create', entityType: 'host_member', entityId: result.id, label: name });
     res.json({ id: result.id });
   } catch (e) {
@@ -99,7 +99,7 @@ router.post('/', async (req, res) => {
 });
 
 router.put('/:id', async (req, res) => {
-  const { name, email, phone, company, designation, category, payment_status, payment_amount, payment_date, payment_mode, notes, force } = req.body;
+  const { name, email, phone, company, designation, category, payment_status, payment_amount, payment_date, payment_mode, notes, leadership_role, force } = req.body;
   try {
     if (!force && (name !== undefined || phone !== undefined)) {
       const current = await db.get('SELECT name, phone FROM host_members WHERE id=$1', [req.params.id]);
@@ -126,6 +126,13 @@ router.put('/:id', async (req, res) => {
     `, [name || null, email || null, phone || null, company || null, designation || null, category || null,
         payment_status || null, payment_amount !== undefined ? Number(payment_amount) : null,
         payment_date || null, payment_mode || null, notes !== undefined ? notes : null, req.params.id]);
+    // Handled as a separate statement (not COALESCE'd with the rest) so an
+    // explicit "" from the admin's "— None —" dropdown option actually clears
+    // a leadership designation — COALESCE would otherwise treat an empty
+    // string the same as "field omitted" and silently keep the old value.
+    if (leadership_role !== undefined) {
+      await db.run('UPDATE host_members SET leadership_role=$1 WHERE id=$2', [leadership_role || null, req.params.id]);
+    }
     logActivity(req.user, { action: 'update', entityType: 'host_member', entityId: Number(req.params.id), label: name });
     res.json({ ok: true });
   } catch (e) {
