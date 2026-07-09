@@ -1,5 +1,6 @@
 const express = require('express');
 const db = require('../db');
+const { logActivity } = require('../lib/activityLogger');
 
 const router = express.Router();
 
@@ -37,6 +38,7 @@ router.post('/', async (req, res) => {
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id
     `, [name, start_date || null, end_date || null, hotel || '', attractions || '', description || '',
         capacity ? Number(capacity) : null, price ? Number(price) : null, status || 'planned', notes || '']);
+    logActivity(req.user, { action: 'create', entityType: 'pre_tour', entityId: result.id, label: name });
     res.json({ id: result.id });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -56,6 +58,7 @@ router.put('/:id', async (req, res) => {
         attractions !== undefined ? attractions : null, description !== undefined ? description : null,
         capacity !== undefined ? Number(capacity) : null, price !== undefined ? Number(price) : null,
         status || null, notes !== undefined ? notes : null, req.params.id]);
+    logActivity(req.user, { action: 'update', entityType: 'pre_tour', entityId: Number(req.params.id), label: name });
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -63,7 +66,9 @@ router.put('/:id', async (req, res) => {
 });
 
 router.delete('/:id', async (req, res) => {
+  const existing = await db.get('SELECT name FROM pre_tours WHERE id=$1', [req.params.id]);
   await db.run('DELETE FROM pre_tours WHERE id=$1', [req.params.id]);
+  logActivity(req.user, { action: 'delete', entityType: 'pre_tour', entityId: Number(req.params.id), label: existing?.name });
   res.json({ ok: true });
 });
 

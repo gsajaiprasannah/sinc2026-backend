@@ -1,6 +1,7 @@
 const express = require('express');
 const db = require('../db');
 const push = require('../pushHelper');
+const { logActivity } = require('../lib/activityLogger');
 
 const router = express.Router();
 
@@ -154,6 +155,7 @@ router.post('/group-trip', async (req, res) => {
     if (driver_id) {
       notifyDriverAssigned(driver_id, { from_location, to_location, trip_date, depart_time });
     }
+    logActivity(req.user, { action: 'create', entityType: 'transport_trip', entityId: tripId, label: `${from_location} → ${to_location}`, details: `${direction}, ${participant_ids.length} passenger(s)` });
     res.json({ id: tripId });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -199,6 +201,7 @@ router.post('/', async (req, res) => {
     if (driver_id) {
       notifyDriverAssigned(driver_id, { from_location, to_location, trip_date, depart_time });
     }
+    logActivity(req.user, { action: 'create', entityType: 'transport_trip', entityId: result.id, label: `${from_location} → ${to_location}` });
     res.json({ id: result.id });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -224,6 +227,7 @@ router.put('/:id', async (req, res) => {
       const updated = await db.get('SELECT * FROM transport_trips WHERE id=$1', [req.params.id]);
       notifyDriverAssigned(driver_id, updated);
     }
+    logActivity(req.user, { action: 'update', entityType: 'transport_trip', entityId: Number(req.params.id) });
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -232,6 +236,7 @@ router.put('/:id', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   await db.run('DELETE FROM transport_trips WHERE id=$1', [req.params.id]);
+  logActivity(req.user, { action: 'delete', entityType: 'transport_trip', entityId: Number(req.params.id) });
   res.json({ ok: true });
 });
 

@@ -3,6 +3,7 @@ const db = require('../db');
 const push = require('../pushHelper');
 const { MODULE_KEYS, isValidModuleKey } = require('./committeeModuleAccess');
 const { attachChecklistRoutes } = require('./checklistHelper');
+const { logActivity } = require('../lib/activityLogger');
 
 const router = express.Router();
 
@@ -50,6 +51,7 @@ router.post('/', async (req, res) => {
       'INSERT INTO committees (name, sort_order, description) VALUES ($1,$2,$3) RETURNING id',
       [name, Number(sort_order) || 0, description || '']
     );
+    logActivity(req.user, { action: 'create', entityType: 'committee', entityId: result.id, label: name });
     res.json({ id: result.id });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -67,6 +69,7 @@ router.put('/:id', async (req, res) => {
       'UPDATE committees SET name=COALESCE($1,name), sort_order=COALESCE($2,sort_order), description=COALESCE($3,description) WHERE id=$4',
       [name || null, sort_order !== undefined ? Number(sort_order) : null, description !== undefined ? description : null, req.params.id]
     );
+    logActivity(req.user, { action: 'update', entityType: 'committee', entityId: Number(req.params.id), label: name });
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -74,7 +77,9 @@ router.put('/:id', async (req, res) => {
 });
 
 router.delete('/:id', async (req, res) => {
+  const existing = await db.get('SELECT name FROM committees WHERE id=$1', [req.params.id]);
   await db.run('DELETE FROM committees WHERE id=$1', [req.params.id]);
+  logActivity(req.user, { action: 'delete', entityType: 'committee', entityId: Number(req.params.id), label: existing?.name });
   res.json({ ok: true });
 });
 
@@ -249,6 +254,7 @@ router.post('/:id/tasks', async (req, res) => {
         }).catch((e) => console.error('committee task push failed', e.message));
       }
     }).catch((e) => console.error('committee task push lookup failed', e.message));
+    logActivity(req.user, { action: 'create', entityType: 'committee_task', entityId: result.id, label: title.trim(), details: `committee #${req.params.id}` });
     res.json({ id: result.id });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -265,6 +271,7 @@ router.put('/tasks/:taskId', async (req, res) => {
       WHERE id=$5
     `, [title || null, description !== undefined ? description : null,
         is_milestone !== undefined ? (is_milestone ? 1 : 0) : null, due_date || null, req.params.taskId]);
+    logActivity(req.user, { action: 'update', entityType: 'committee_task', entityId: Number(req.params.taskId), label: title });
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -272,7 +279,9 @@ router.put('/tasks/:taskId', async (req, res) => {
 });
 
 router.delete('/tasks/:taskId', async (req, res) => {
+  const existing = await db.get('SELECT title FROM committee_tasks WHERE id=$1', [req.params.taskId]);
   await db.run('DELETE FROM committee_tasks WHERE id=$1', [req.params.taskId]);
+  logActivity(req.user, { action: 'delete', entityType: 'committee_task', entityId: Number(req.params.taskId), label: existing?.title });
   res.json({ ok: true });
 });
 

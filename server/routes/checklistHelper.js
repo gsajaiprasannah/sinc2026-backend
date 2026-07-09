@@ -13,6 +13,7 @@
 // server/routes/deliveryMonitor.js for the cross-committee dashboard this
 // feeds.
 const db = require('../db');
+const { logActivity } = require('../lib/activityLogger');
 
 const SELECT_WITH_COMMITTEE = `
   SELECT ci.*, c.name AS responsible_committee_name, u.username AS completed_by_username
@@ -46,6 +47,7 @@ function attachChecklistRoutes(router, ownerType) {
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id
       `, [ownerType, req.params.id, category || '', label.trim(), status || 'pending', Number(sort_order) || 0,
           notes || '', responsible_committee_id || null, due_date || null]);
+      logActivity(req.user, { action: 'create', entityType: 'checklist_item', entityId: result.id, label: label.trim(), details: `${ownerType} #${req.params.id}` });
       res.json({ id: result.id });
     } catch (e) {
       res.status(400).json({ error: e.message });
@@ -179,6 +181,14 @@ function buildChecklistItemsRouter() {
           responsible_committee_id=$6, due_date=$7, completed_by_user_id=$8, completed_at=$9, updated_at=NOW()
         WHERE id=$10
       `, [label, category, status, sort_order, notes, responsible_committee_id, due_date, completed_by_user_id, completed_at, req.params.itemId]);
+      const justCompleted = status === 'done' && existing.status !== 'done';
+      logActivity(req.user, {
+        action: justCompleted ? 'complete' : 'update',
+        entityType: 'checklist_item',
+        entityId: Number(req.params.itemId),
+        label,
+        details: `${existing.owner_type} #${existing.owner_id}`
+      });
       res.json({ ok: true });
     } catch (e) {
       res.status(400).json({ error: e.message });
@@ -186,7 +196,9 @@ function buildChecklistItemsRouter() {
   });
 
   router.delete('/:itemId', async (req, res) => {
+    const existing = await db.get('SELECT label, owner_type, owner_id FROM checklist_items WHERE id=$1', [req.params.itemId]);
     await db.run('DELETE FROM checklist_items WHERE id=$1', [req.params.itemId]);
+    logActivity(req.user, { action: 'delete', entityType: 'checklist_item', entityId: Number(req.params.itemId), label: existing?.label, details: existing ? `${existing.owner_type} #${existing.owner_id}` : undefined });
     res.json({ ok: true });
   });
 

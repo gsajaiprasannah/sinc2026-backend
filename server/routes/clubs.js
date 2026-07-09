@@ -2,6 +2,7 @@ const express = require('express');
 const multer = require('multer');
 const { parse } = require('csv-parse/sync');
 const db = require('../db');
+const { logActivity } = require('../lib/activityLogger');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -23,6 +24,7 @@ router.post('/', async (req, res) => {
       'INSERT INTO clubs (name, city, state, zone, members_count) VALUES ($1,$2,$3,$4,$5) RETURNING id',
       [name, city || '', state || '', zone || '', Number(members_count) || 0]
     );
+    logActivity(req.user, { action: 'create', entityType: 'club', entityId: result.id, label: name });
     res.json({ id: result.id });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -38,6 +40,7 @@ router.put('/:id', async (req, res) => {
       [name || null, city || null, state || null, zone || null,
        members_count !== undefined ? Number(members_count) : null, req.params.id]
     );
+    logActivity(req.user, { action: 'update', entityType: 'club', entityId: Number(req.params.id), label: name });
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -45,7 +48,9 @@ router.put('/:id', async (req, res) => {
 });
 
 router.delete('/:id', async (req, res) => {
+  const existing = await db.get('SELECT name FROM clubs WHERE id=$1', [req.params.id]);
   await db.run('DELETE FROM clubs WHERE id=$1', [req.params.id]);
+  logActivity(req.user, { action: 'delete', entityType: 'club', entityId: Number(req.params.id), label: existing?.name });
   res.json({ ok: true });
 });
 

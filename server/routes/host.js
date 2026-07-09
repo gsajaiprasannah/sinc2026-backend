@@ -8,6 +8,7 @@ const db = require('../db');
 const { requireAuth } = require('../auth');
 const push = require('../pushHelper');
 const { grantedModulesForHostMember } = require('./committeeModuleAccess');
+const { logActivity } = require('../lib/activityLogger');
 
 const router = express.Router();
 
@@ -249,6 +250,7 @@ router.put('/assignments/:id', requireHostMember, async (req, res) => {
       'UPDATE delegate_assignments SET status=COALESCE($1,status), notes=COALESCE($2,notes), updated_at=NOW() WHERE id=$3',
       [status || null, notes !== undefined ? notes : null, req.params.id]
     );
+    logActivity(req.user, { action: 'update', entityType: 'delegate_assignment', entityId: Number(req.params.id), details: status });
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -261,6 +263,7 @@ router.put('/tasks/:id', requireHostMember, async (req, res) => {
     if (!owned) return res.status(404).json({ error: 'Task not found.' });
     const { status } = req.body;
     await db.run('UPDATE host_tasks SET status=COALESCE($1,status), updated_at=NOW() WHERE id=$2', [status || null, req.params.id]);
+    logActivity(req.user, { action: 'update', entityType: 'host_task', entityId: Number(req.params.id), details: status });
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -312,6 +315,11 @@ router.put('/checklist/:id', requireHostMember, async (req, res) => {
       'UPDATE checklist_items SET status=$1, notes=COALESCE($2,notes), completed_by_user_id=$3, completed_at=$4, updated_at=NOW() WHERE id=$5',
       [newStatus, notes !== undefined ? notes : null, completedByUserId, completedAt, req.params.id]
     );
+    logActivity(req.user, {
+      action: newStatus === 'done' && item.status !== 'done' ? 'complete' : 'update',
+      entityType: 'checklist_item', entityId: Number(req.params.id), label: item.label,
+      details: `${item.owner_type} #${item.owner_id}`
+    });
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -357,6 +365,10 @@ router.put('/deliveries/:id', requireHostMember, async (req, res) => {
       'UPDATE inventory_distributions SET status=$1, notes=COALESCE($2,notes), delivered_by_host_member_id=$3, delivered_at=$4, updated_at=NOW() WHERE id=$5',
       [newStatus, notes !== undefined ? notes : null, deliveredBy, deliveredAt, req.params.id]
     );
+    logActivity(req.user, {
+      action: newStatus === 'delivered' && dist.status !== 'delivered' ? 'deliver' : 'update',
+      entityType: 'inventory_distribution', entityId: Number(req.params.id)
+    });
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -379,6 +391,7 @@ router.put('/committee-tasks/:completionId', requireHostMember, async (req, res)
       `UPDATE committee_task_completions SET status=$1, completed_at=CASE WHEN $1='done' THEN NOW() ELSE NULL END WHERE id=$2`,
       [status, req.params.completionId]
     );
+    logActivity(req.user, { action: status === 'done' ? 'complete' : 'update', entityType: 'committee_task_completion', entityId: Number(req.params.completionId) });
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -425,6 +438,7 @@ router.post('/committees/:committeeId/tasks', requireHostMember, async (req, res
       }
       return task;
     });
+    logActivity(req.user, { action: 'create', entityType: 'committee_task', entityId: result.id, label: title.trim(), details: `committee #${req.params.committeeId}` });
     const pushQuery = assigned_to_host_member_id
       ? { sql: `SELECT u.id FROM users u WHERE u.host_member_id = $1`, params: [assigned_to_host_member_id] }
       : { sql: `SELECT u.id FROM committee_members cm JOIN users u ON u.host_member_id = cm.host_member_id WHERE cm.committee_id = $1`, params: [req.params.committeeId] };
@@ -465,6 +479,7 @@ router.post('/committees/:committeeId/checklist-items', requireHostMember, async
       INSERT INTO checklist_items (owner_type, owner_id, category, label, status, notes, responsible_committee_id, due_date)
       VALUES ('committee', $1, $2, $3, 'pending', $4, $1, $5) RETURNING id
     `, [cid, category || '', label.trim(), notes || '', due_date || null]);
+    logActivity(req.user, { action: 'create', entityType: 'checklist_item', entityId: result.id, label: label.trim(), details: `committee #${cid}` });
     res.json({ id: result.id });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -500,6 +515,7 @@ router.put('/committee-task-completions/:id/verify', requireHostMember, async (r
        WHERE id=$3`,
       [status, req.hostMemberId, req.params.id]
     );
+    logActivity(req.user, { action: status === 'verified' ? 'verify' : 'update', entityType: 'committee_task_completion', entityId: Number(req.params.id) });
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });

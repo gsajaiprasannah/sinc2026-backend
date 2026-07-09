@@ -1,5 +1,6 @@
 const express = require('express');
 const db = require('../db');
+const { logActivity } = require('../lib/activityLogger');
 
 const router = express.Router();
 
@@ -66,6 +67,7 @@ router.post('/', async (req, res) => {
       `, [vehicle_code, vehicle_type, model || '', Number(seating_capacity) || 0,
           registration_number || '', partner_id || null, notes || '']);
     });
+    logActivity(req.user, { action: 'create', entityType: 'vehicle', entityId: result.id, label: vehicle_code });
     res.json({ id: result.id, vehicle_code });
   } catch (e) {
     if (e.code === '23505') {
@@ -88,6 +90,7 @@ router.put('/:id', async (req, res) => {
         seating_capacity !== undefined ? Number(seating_capacity) : null,
         registration_number || null, partner_id || null,
         notes !== undefined ? notes : null, req.params.id]);
+    logActivity(req.user, { action: 'update', entityType: 'vehicle', entityId: Number(req.params.id) });
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -95,7 +98,9 @@ router.put('/:id', async (req, res) => {
 });
 
 router.delete('/:id', async (req, res) => {
+  const existing = await db.get('SELECT vehicle_code FROM vehicles WHERE id=$1', [req.params.id]);
   await db.run('DELETE FROM vehicles WHERE id=$1', [req.params.id]);
+  logActivity(req.user, { action: 'delete', entityType: 'vehicle', entityId: Number(req.params.id), label: existing?.vehicle_code });
   res.json({ ok: true });
 });
 

@@ -3,6 +3,7 @@ const multer = require('multer');
 const db = require('../db');
 const { attachChecklistRoutes, deleteChecklistForOwner } = require('./checklistHelper');
 const { saveFile, deleteStoredFile } = require('../uploadHelper');
+const { logActivity } = require('../lib/activityLogger');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }); // logos: 10MB is plenty
@@ -70,6 +71,7 @@ router.post('/', async (req, res) => {
       `, [name.trim(), tier || '', contact_person || '', phone || '', email || '', sponsor_pass_code,
           guest_relation_host_member_id || null, status || 'confirmed', notes || '']);
     });
+    logActivity(req.user, { action: 'create', entityType: 'sponsor', entityId: result.id, label: name.trim() });
     res.json({ id: result.id, sponsor_pass_code });
   } catch (e) {
     if (e.code === '23505') {
@@ -92,6 +94,7 @@ router.put('/:id', async (req, res) => {
     `, [name || null, tier !== undefined ? tier : null, contact_person !== undefined ? contact_person : null,
         phone !== undefined ? phone : null, email !== undefined ? email : null,
         guest_relation_host_member_id || null, status || null, notes !== undefined ? notes : null, req.params.id]);
+    logActivity(req.user, { action: 'update', entityType: 'sponsor', entityId: Number(req.params.id), label: name });
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -99,10 +102,11 @@ router.put('/:id', async (req, res) => {
 });
 
 router.delete('/:id', async (req, res) => {
-  const row = await db.get('SELECT logo_url FROM sponsors WHERE id=$1', [req.params.id]);
+  const row = await db.get('SELECT name, logo_url FROM sponsors WHERE id=$1', [req.params.id]);
   if (row) await deleteStoredFile(row.logo_url);
   await deleteChecklistForOwner('sponsor', req.params.id);
   await db.run('DELETE FROM sponsors WHERE id=$1', [req.params.id]);
+  logActivity(req.user, { action: 'delete', entityType: 'sponsor', entityId: Number(req.params.id), label: row?.name });
   res.json({ ok: true });
 });
 

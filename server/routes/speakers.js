@@ -3,6 +3,7 @@ const multer = require('multer');
 const db = require('../db');
 const { attachChecklistRoutes, deleteChecklistForOwner } = require('./checklistHelper');
 const { saveFile, deleteStoredFile } = require('../uploadHelper');
+const { logActivity } = require('../lib/activityLogger');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }); // photos: 10MB is plenty
@@ -46,6 +47,7 @@ router.post('/', async (req, res) => {
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id
     `, [name.trim(), designation || '', organization || '', phone || '', email || '',
         topic || '', session_type || 'Speaker', guest_relation_host_member_id || null, status || 'invited', notes || '']);
+    logActivity(req.user, { action: 'create', entityType: 'speaker', entityId: result.id, label: name.trim() });
     res.json({ id: result.id });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -65,6 +67,7 @@ router.put('/:id', async (req, res) => {
     `, [name || null, designation !== undefined ? designation : null, organization !== undefined ? organization : null,
         phone !== undefined ? phone : null, email !== undefined ? email : null, topic !== undefined ? topic : null,
         session_type || null, guest_relation_host_member_id || null, status || null, notes !== undefined ? notes : null, req.params.id]);
+    logActivity(req.user, { action: 'update', entityType: 'speaker', entityId: Number(req.params.id), label: name });
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -72,10 +75,11 @@ router.put('/:id', async (req, res) => {
 });
 
 router.delete('/:id', async (req, res) => {
-  const row = await db.get('SELECT photo_url FROM speakers WHERE id=$1', [req.params.id]);
+  const row = await db.get('SELECT name, photo_url FROM speakers WHERE id=$1', [req.params.id]);
   if (row) await deleteStoredFile(row.photo_url);
   await deleteChecklistForOwner('speaker', req.params.id);
   await db.run('DELETE FROM speakers WHERE id=$1', [req.params.id]);
+  logActivity(req.user, { action: 'delete', entityType: 'speaker', entityId: Number(req.params.id), label: row?.name });
   res.json({ ok: true });
 });
 

@@ -8,6 +8,7 @@
 // has no concept of quantities in stock.
 const express = require('express');
 const db = require('../db');
+const { logActivity } = require('../lib/activityLogger');
 
 const router = express.Router();
 
@@ -72,6 +73,7 @@ router.post('/', async (req, res) => {
     `, [name.trim(), category || '', unit || 'pcs', Number(quantity_procured) || 0, reorder_threshold !== undefined && reorder_threshold !== '' ? Number(reorder_threshold) : null,
         vendor_name || '', unit_cost !== undefined && unit_cost !== '' ? Number(unit_cost) : null, procurement_status || 'planned',
         responsible_committee_id || null, notes || '']);
+    logActivity(req.user, { action: 'create', entityType: 'inventory_item', entityId: result.id, label: name.trim() });
     res.json({ id: result.id });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -106,6 +108,7 @@ router.put('/:id', async (req, res) => {
         unit_cost=$7, procurement_status=$8, responsible_committee_id=$9, notes=$10, updated_at=NOW()
       WHERE id=$11
     `, [name, category, unit, quantity_procured, reorder_threshold, vendor_name, unit_cost, procurement_status, responsible_committee_id, notes, req.params.id]);
+    logActivity(req.user, { action: 'update', entityType: 'inventory_item', entityId: Number(req.params.id), label: name });
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -114,9 +117,10 @@ router.put('/:id', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   try {
-    const existing = await db.get('SELECT id FROM inventory_items WHERE id=$1', [req.params.id]);
+    const existing = await db.get('SELECT name FROM inventory_items WHERE id=$1', [req.params.id]);
     if (!existing) return res.status(404).json({ error: 'Inventory item not found.' });
     await db.run('DELETE FROM inventory_items WHERE id=$1', [req.params.id]);
+    logActivity(req.user, { action: 'delete', entityType: 'inventory_item', entityId: Number(req.params.id), label: existing.name });
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -230,6 +234,10 @@ router.put('/distributions/:id', async (req, res) => {
         delivered_by_host_member_id=$5, delivered_at=$6, updated_at=NOW()
       WHERE id=$7
     `, [quantity, notes, assigned_host_member_id, status, delivered_by_host_member_id, delivered_at, req.params.id]);
+    if (status === 'delivered' && existing.status !== 'delivered') {
+      const item = await db.get('SELECT name FROM inventory_items WHERE id=$1', [existing.inventory_item_id]);
+      logActivity(req.user, { action: 'deliver', entityType: 'inventory_distribution', entityId: Number(req.params.id), label: item?.name, details: `to ${existing.recipient_type} #${existing.recipient_id}` });
+    }
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });

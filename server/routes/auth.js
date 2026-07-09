@@ -1,6 +1,7 @@
 const express = require('express');
 const db = require('../db');
 const { hashPassword, verifyPassword, signToken, requireAuth, requireSuperAdmin } = require('../auth');
+const { logActivity } = require('../lib/activityLogger');
 
 const router = express.Router();
 
@@ -36,6 +37,7 @@ router.post('/signup', async (req, res) => {
       `INSERT INTO users (username, email, password_hash, role, status) VALUES ($1,$2,$3,'admin','pending')`,
       [username.trim(), (email || '').trim(), hash]
     );
+    logActivity(null, { action: 'signup_requested', entityType: 'user', label: username.trim(), username: username.trim() });
     res.json({ ok: true, message: 'Signup request submitted. An admin needs to approve your account before you can log in.' });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -47,12 +49,19 @@ router.post('/login', async (req, res) => {
   if (!username || !password) return res.status(400).json({ error: 'Username and password are required.' });
   try {
     const user = await db.get('SELECT * FROM users WHERE lower(username)=lower($1)', [username.trim()]);
-    if (!user) return res.status(401).json({ error: 'Invalid username or password.' });
+    if (!user) {
+      logActivity(null, { action: 'login_failed', entityType: 'user', label: username.trim(), details: 'Unknown username', username: username.trim() });
+      return res.status(401).json({ error: 'Invalid username or password.' });
+    }
     if (user.status === 'pending') return res.status(403).json({ error: 'Your account is awaiting admin approval.' });
     if (user.status !== 'approved') return res.status(403).json({ error: 'This account is not active. Contact a super admin.' });
     const ok = await verifyPassword(password, user.password_hash);
-    if (!ok) return res.status(401).json({ error: 'Invalid username or password.' });
+    if (!ok) {
+      logActivity(user, { action: 'login_failed', entityType: 'user', entityId: user.id, label: user.username, details: 'Wrong password' });
+      return res.status(401).json({ error: 'Invalid username or password.' });
+    }
     const token = signToken(user);
+    logActivity(user, { action: 'login', entityType: 'user', entityId: user.id, label: user.username });
     res.json({ token, user: publicUser(user) });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -122,6 +131,7 @@ router.post('/users', requireSuperAdmin, async (req, res) => {
         linked?.column === 'partner_id' ? linkedValues.partner_id : null,
         linked?.column === 'volunteer_id' ? linkedValues.volunteer_id : null]
     );
+    logActivity(req.user, { action: 'create', entityType: 'user', entityId: result.id, label: username.trim(), details: `role: ${finalRole}` });
     res.json({ id: result.id });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -161,6 +171,9 @@ router.post('/users/bulk-create-host-logins', requireSuperAdmin, async (req, res
         skipped.push({ name: m.name, reason: e.message });
       }
     }
+    if (created.length) {
+      logActivity(req.user, { action: 'bulk_create', entityType: 'user', label: `${created.length} host-member login(s)`, details: created.map((c) => c.username).join(', ') });
+    }
     res.json({ created, skipped, default_password: DEFAULT_PASSWORD });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -169,11 +182,13 @@ router.post('/users/bulk-create-host-logins', requireSuperAdmin, async (req, res
 
 router.put('/users/:id/approve', requireSuperAdmin, async (req, res) => {
   await db.run(`UPDATE users SET status='approved', approved_at=NOW(), approved_by=$1 WHERE id=$2`, [req.user.id, req.params.id]);
+  logActivity(req.user, { action: 'approve', entityType: 'user', entityId: Number(req.params.id) });
   res.json({ ok: true });
 });
 
 router.put('/users/:id/reject', requireSuperAdmin, async (req, res) => {
   await db.run(`UPDATE users SET status='rejected' WHERE id=$1`, [req.params.id]);
+  logActivity(req.user, { action: 'reject', entityType: 'user', entityId: Number(req.params.id) });
   res.json({ ok: true });
 });
 
@@ -186,6 +201,7 @@ router.put('/users/:id', requireSuperAdmin, async (req, res) => {
        WHERE id=$6`,
       [role || null, status || null, host_member_id || null, driver_id || null, partner_id || null, req.params.id]
     );
+    logActivity(req.user, { action: 'update', entityType: 'user', entityId: Number(req.params.id), details: `role: ${role || '—'}, status: ${status || '—'}` });
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -203,10 +219,11 @@ router.put('/users/:id/reset-password', requireSuperAdmin, async (req, res) => {
     return res.status(400).json({ error: 'New password must be at least 6 characters.' });
   }
   try {
-    const user = await db.get('SELECT id FROM users WHERE id=$1', [req.params.id]);
+    const user = await db.get('SELECT id, username FROM users WHERE id=$1', [req.params.id]);
     if (!user) return res.status(404).json({ error: 'Login not found.' });
     const hash = await hashPassword(new_password);
     await db.run('UPDATE users SET password_hash=$1 WHERE id=$2', [hash, req.params.id]);
+    logActivity(req.user, { action: 'reset_password', entityType: 'user', entityId: Number(req.params.id), label: user.username });
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -217,7 +234,9 @@ router.delete('/users/:id', requireSuperAdmin, async (req, res) => {
   if (Number(req.params.id) === Number(req.user.id)) {
     return res.status(400).json({ error: "You can't delete your own account." });
   }
+  const target = await db.get('SELECT username FROM users WHERE id=$1', [req.params.id]);
   await db.run('DELETE FROM users WHERE id=$1', [req.params.id]);
+  logActivity(req.user, { action: 'delete', entityType: 'user', entityId: Number(req.params.id), label: target?.username });
   res.json({ ok: true });
 });
 

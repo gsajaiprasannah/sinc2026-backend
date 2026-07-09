@@ -2,6 +2,7 @@ const express = require('express');
 const multer = require('multer');
 const { parse } = require('csv-parse/sync');
 const db = require('../db');
+const { logActivity } = require('../lib/activityLogger');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -60,6 +61,7 @@ router.post('/', async (req, res) => {
           payment_mode || '', payment_status || 'pending', payment_ref || '']);
       return r;
     });
+    logActivity(req.user, { action: 'create', entityType: 'registration', entityId: result.id, label: reg_number });
     res.json({ id: result.id, reg_number });
   } catch (e) {
     if (e.code === '23505') {
@@ -83,6 +85,7 @@ router.put('/:id', async (req, res) => {
         amount_paid !== undefined ? Number(amount_paid) : null,
         amount_due !== undefined ? Number(amount_due) : null,
         payment_mode || null, payment_status || null, payment_ref || null, req.params.id]);
+    logActivity(req.user, { action: 'update', entityType: 'registration', entityId: Number(req.params.id) });
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -90,7 +93,9 @@ router.put('/:id', async (req, res) => {
 });
 
 router.delete('/:id', async (req, res) => {
+  const existing = await db.get('SELECT reg_number FROM registrations WHERE id=$1', [req.params.id]);
   await db.run('DELETE FROM registrations WHERE id=$1', [req.params.id]);
+  logActivity(req.user, { action: 'delete', entityType: 'registration', entityId: Number(req.params.id), label: existing?.reg_number });
   res.json({ ok: true });
 });
 

@@ -3,6 +3,7 @@ const multer = require('multer');
 const { parse } = require('csv-parse/sync');
 const db = require('../db');
 const { attachChecklistRoutes, deleteChecklistForOwner } = require('./checklistHelper');
+const { logActivity } = require('../lib/activityLogger');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -90,6 +91,7 @@ router.post('/', async (req, res) => {
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id
     `, [name, email || '', phone || '', company || '', designation || '', category || '',
         payment_status || 'pending', Number(payment_amount) || 5000, payment_date || null, payment_mode || '', notes || '']);
+    logActivity(req.user, { action: 'create', entityType: 'host_member', entityId: result.id, label: name });
     res.json({ id: result.id });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -124,6 +126,7 @@ router.put('/:id', async (req, res) => {
     `, [name || null, email || null, phone || null, company || null, designation || null, category || null,
         payment_status || null, payment_amount !== undefined ? Number(payment_amount) : null,
         payment_date || null, payment_mode || null, notes !== undefined ? notes : null, req.params.id]);
+    logActivity(req.user, { action: 'update', entityType: 'host_member', entityId: Number(req.params.id), label: name });
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -131,8 +134,10 @@ router.put('/:id', async (req, res) => {
 });
 
 router.delete('/:id', async (req, res) => {
+  const existing = await db.get('SELECT name FROM host_members WHERE id=$1', [req.params.id]);
   await deleteChecklistForOwner('host_member', req.params.id);
   await db.run('DELETE FROM host_members WHERE id=$1', [req.params.id]);
+  logActivity(req.user, { action: 'delete', entityType: 'host_member', entityId: Number(req.params.id), label: existing?.name });
   res.json({ ok: true });
 });
 
@@ -171,6 +176,7 @@ router.post('/bulk-upload', upload.single('file'), async (req, res) => {
         }
       }
     });
+    if (inserted || updated) logActivity(req.user, { action: 'bulk_create', entityType: 'host_member', label: `${inserted} added, ${updated} updated via CSV` });
     res.json({ ok: true, imported: inserted, updated });
   } catch (e) {
     res.status(400).json({ error: 'Failed to parse/import CSV: ' + e.message });

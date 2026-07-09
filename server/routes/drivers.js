@@ -1,5 +1,6 @@
 const express = require('express');
 const db = require('../db');
+const { logActivity } = require('../lib/activityLogger');
 
 const router = express.Router();
 
@@ -54,6 +55,7 @@ router.post('/', async (req, res) => {
       INSERT INTO drivers (name, phone, vehicle_number, vehicle_type, vehicle_id, partner_id, notes)
       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id
     `, [name, phone || '', vehicle_number || '', vehicle_type || '', vehicle_id || null, partner_id || null, notes || '']);
+    logActivity(req.user, { action: 'create', entityType: 'driver', entityId: result.id, label: name });
     res.json({ id: result.id });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -71,6 +73,7 @@ router.put('/:id', async (req, res) => {
       WHERE id=$8
     `, [name || null, phone || null, vehicle_number || null, vehicle_type || null, vehicle_id || null,
         partner_id || null, notes !== undefined ? notes : null, req.params.id]);
+    logActivity(req.user, { action: 'update', entityType: 'driver', entityId: Number(req.params.id), label: name });
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -78,7 +81,9 @@ router.put('/:id', async (req, res) => {
 });
 
 router.delete('/:id', async (req, res) => {
+  const existing = await db.get('SELECT name FROM drivers WHERE id=$1', [req.params.id]);
   await db.run('DELETE FROM drivers WHERE id=$1', [req.params.id]);
+  logActivity(req.user, { action: 'delete', entityType: 'driver', entityId: Number(req.params.id), label: existing?.name });
   res.json({ ok: true });
 });
 

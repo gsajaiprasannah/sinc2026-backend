@@ -8,6 +8,7 @@ const express = require('express');
 const db = require('../db');
 const { requireAuth, requireAdminRole } = require('../auth');
 const push = require('../pushHelper');
+const { logActivity } = require('../lib/activityLogger');
 
 const router = express.Router();
 
@@ -140,6 +141,8 @@ router.post('/', requireAdminRole, async (req, res) => {
     });
 
     push.sendToUsers(recipientIds, { title: title.trim(), body: (body || '').trim(), url: 'login.html' }).catch(() => {});
+
+    logActivity(req.user, { action: 'send', entityType: 'message', entityId: result.messageId, label: title.trim(), details: `${target_type} → ${recipientIds.length} recipient(s)` });
 
     res.json({ id: result.messageId, recipient_count: recipientIds.length });
   } catch (e) {

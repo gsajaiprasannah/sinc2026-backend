@@ -1,6 +1,7 @@
 const express = require('express');
 const db = require('../db');
 const { attachChecklistRoutes, deleteChecklistForOwner } = require('./checklistHelper');
+const { logActivity } = require('../lib/activityLogger');
 
 const router = express.Router();
 
@@ -43,6 +44,7 @@ router.post('/', async (req, res) => {
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id
     `, [name.trim(), designation || '', organization || '', phone || '', email || '',
         category || '', visit_date || null, guest_relation_host_member_id || null, status || 'invited', notes || '']);
+    logActivity(req.user, { action: 'create', entityType: 'guest_visitor', entityId: result.id, label: name.trim() });
     res.json({ id: result.id });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -61,6 +63,7 @@ router.put('/:id', async (req, res) => {
     `, [name || null, designation !== undefined ? designation : null, organization !== undefined ? organization : null,
         phone !== undefined ? phone : null, email !== undefined ? email : null, category !== undefined ? category : null,
         visit_date || null, guest_relation_host_member_id || null, status || null, notes !== undefined ? notes : null, req.params.id]);
+    logActivity(req.user, { action: 'update', entityType: 'guest_visitor', entityId: Number(req.params.id), label: name });
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -68,8 +71,10 @@ router.put('/:id', async (req, res) => {
 });
 
 router.delete('/:id', async (req, res) => {
+  const existing = await db.get('SELECT name FROM guest_visitors WHERE id=$1', [req.params.id]);
   await deleteChecklistForOwner('guest_visitor', req.params.id);
   await db.run('DELETE FROM guest_visitors WHERE id=$1', [req.params.id]);
+  logActivity(req.user, { action: 'delete', entityType: 'guest_visitor', entityId: Number(req.params.id), label: existing?.name });
   res.json({ ok: true });
 });
 

@@ -16,6 +16,7 @@
 // behind requireSuperAdmin, globally, before any route-specific handler runs.
 const express = require('express');
 const db = require('../db');
+const { logActivity } = require('../lib/activityLogger');
 
 const router = express.Router();
 
@@ -128,6 +129,7 @@ router.post('/', async (req, res) => {
     );
     const template = await db.get('SELECT * FROM checklist_templates WHERE id=$1', [result.id]);
     const sync = await syncTemplateToExistingEntities(template);
+    logActivity(req.user, { action: 'create', entityType: 'checklist_template', entityId: result.id, label: label.trim(), details: owner_type });
     res.json({ id: result.id, sync });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -162,6 +164,7 @@ router.put('/:id', async (req, res) => {
     }
     const template = await db.get('SELECT * FROM checklist_templates WHERE id=$1', [req.params.id]);
     const sync = await syncTemplateToExistingEntities(template);
+    logActivity(req.user, { action: 'update', entityType: 'checklist_template', entityId: Number(req.params.id), label, details: template.owner_type });
     res.json({ ok: true, sync });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -170,9 +173,10 @@ router.put('/:id', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   try {
-    const existing = await db.get('SELECT id FROM checklist_templates WHERE id=$1', [req.params.id]);
+    const existing = await db.get('SELECT id, label, owner_type FROM checklist_templates WHERE id=$1', [req.params.id]);
     if (!existing) return res.status(404).json({ error: 'Checklist template item not found.' });
     await db.run('DELETE FROM checklist_templates WHERE id=$1', [req.params.id]);
+    logActivity(req.user, { action: 'delete', entityType: 'checklist_template', entityId: Number(req.params.id), label: existing.label, details: existing.owner_type });
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });

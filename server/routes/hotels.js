@@ -1,5 +1,6 @@
 const express = require('express');
 const db = require('../db');
+const { logActivity } = require('../lib/activityLogger');
 
 const router = express.Router();
 
@@ -25,6 +26,7 @@ router.post('/', async (req, res) => {
       INSERT INTO hotels (name, address, contact_person, phone, notes)
       VALUES ($1,$2,$3,$4,$5) RETURNING id
     `, [name.trim(), address || '', contact_person || '', phone || '', notes || '']);
+    logActivity(req.user, { action: 'create', entityType: 'hotel', entityId: result.id, label: name.trim() });
     res.json({ id: result.id });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -41,6 +43,7 @@ router.put('/:id', async (req, res) => {
       WHERE id=$6
     `, [name || null, address !== undefined ? address : null, contact_person !== undefined ? contact_person : null,
         phone !== undefined ? phone : null, notes !== undefined ? notes : null, req.params.id]);
+    logActivity(req.user, { action: 'update', entityType: 'hotel', entityId: Number(req.params.id), label: name });
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -48,7 +51,9 @@ router.put('/:id', async (req, res) => {
 });
 
 router.delete('/:id', async (req, res) => {
+  const existing = await db.get('SELECT name FROM hotels WHERE id=$1', [req.params.id]);
   await db.run('DELETE FROM hotels WHERE id=$1', [req.params.id]);
+  logActivity(req.user, { action: 'delete', entityType: 'hotel', entityId: Number(req.params.id), label: existing?.name });
   res.json({ ok: true });
 });
 

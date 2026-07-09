@@ -11,6 +11,7 @@
 // (server/index.js's global DELETE-block covers this route too).
 const express = require('express');
 const db = require('../db');
+const { logActivity } = require('../lib/activityLogger');
 
 const router = express.Router();
 
@@ -45,6 +46,7 @@ router.delete('/:id', async (req, res) => {
     const existing = await db.get('SELECT id FROM transport_points WHERE id=$1', [req.params.id]);
     if (!existing) return res.status(404).json({ error: 'Point not found.' });
     await db.run('DELETE FROM transport_points WHERE id=$1', [req.params.id]);
+    logActivity(req.user, { action: 'delete', entityType: 'transport_point', entityId: Number(req.params.id) });
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });

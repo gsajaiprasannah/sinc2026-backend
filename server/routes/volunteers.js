@@ -8,6 +8,7 @@
 const express = require('express');
 const db = require('../db');
 const { MODULE_KEYS, isValidModuleKey } = require('./committeeModuleAccess');
+const { logActivity } = require('../lib/activityLogger');
 
 const router = express.Router();
 
@@ -92,6 +93,7 @@ router.post('/', async (req, res) => {
       `INSERT INTO volunteers (name, phone, email, organization, notes) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
       [name.trim(), phone || '', email || '', organization || '', notes || '']
     );
+    logActivity(req.user, { action: 'create', entityType: 'volunteer', entityId: result.id, label: name.trim() });
     res.json({ id: result.id });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -119,6 +121,7 @@ router.put('/:id', async (req, res) => {
       [name || null, phone !== undefined ? phone : null, email !== undefined ? email : null,
         organization !== undefined ? organization : null, notes !== undefined ? notes : null, req.params.id]
     );
+    logActivity(req.user, { action: 'update', entityType: 'volunteer', entityId: Number(req.params.id), label: name });
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -126,7 +129,9 @@ router.put('/:id', async (req, res) => {
 });
 
 router.delete('/:id', async (req, res) => {
+  const existing = await db.get('SELECT name FROM volunteers WHERE id=$1', [req.params.id]);
   await db.run('DELETE FROM volunteers WHERE id=$1', [req.params.id]);
+  logActivity(req.user, { action: 'delete', entityType: 'volunteer', entityId: Number(req.params.id), label: existing?.name });
   res.json({ ok: true });
 });
 
@@ -153,6 +158,7 @@ router.put('/:id/modules', async (req, res) => {
         await tx.run('INSERT INTO volunteer_module_access (volunteer_id, module_key) VALUES ($1,$2) ON CONFLICT DO NOTHING', [req.params.id, key]);
       }
     });
+    logActivity(req.user, { action: 'update', entityType: 'volunteer_modules', entityId: Number(req.params.id), details: keys.join(', ') || 'none' });
     res.json({ ok: true, module_keys: keys });
   } catch (e) {
     res.status(400).json({ error: e.message });

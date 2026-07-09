@@ -3,6 +3,7 @@ const multer = require('multer');
 const { parse } = require('csv-parse/sync');
 const db = require('../db');
 const { attachChecklistRoutes, deleteChecklistForOwner } = require('./checklistHelper');
+const { logActivity } = require('../lib/activityLogger');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -152,6 +153,7 @@ router.post('/', async (req, res) => {
       values
     );
     const row = result.rows[0] || {};
+    logActivity(req.user, { action: 'create', entityType: 'participant', entityId: row.id, label: body.name });
     res.json({ id: row.id, participant_code: row.participant_code });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -194,6 +196,7 @@ router.put('/:id', async (req, res) => {
     const setClause = cols.map((c, i) => `${c}=$${i + 1}`).join(',');
     const values = cols.map((c) => body[c]);
     await db.run(`UPDATE participants SET ${setClause} WHERE id=$${cols.length + 1}`, [...values, req.params.id]);
+    logActivity(req.user, { action: 'update', entityType: 'participant', entityId: Number(req.params.id), label: body.name });
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -201,8 +204,10 @@ router.put('/:id', async (req, res) => {
 });
 
 router.delete('/:id', async (req, res) => {
+  const existing = await db.get('SELECT name FROM participants WHERE id=$1', [req.params.id]);
   await deleteChecklistForOwner('participant', req.params.id);
   await db.run('DELETE FROM participants WHERE id=$1', [req.params.id]);
+  logActivity(req.user, { action: 'delete', entityType: 'participant', entityId: Number(req.params.id), label: existing?.name });
   res.json({ ok: true });
 });
 
@@ -266,6 +271,7 @@ router.post('/bulk-upload', upload.single('file'), async (req, res) => {
         imported++;
       }
     });
+    if (imported) logActivity(req.user, { action: 'bulk_create', entityType: 'participant', label: `${imported} delegate(s) via CSV`, details: `${skipped.length} skipped` });
     res.json({ ok: true, imported, skipped: skipped.length, duplicates: skipped });
   } catch (e) {
     res.status(400).json({ error: 'Failed to parse/import CSV: ' + e.message });
