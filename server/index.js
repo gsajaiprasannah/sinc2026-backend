@@ -69,12 +69,16 @@ app.use('/api/assignments', requireAdminRole, require('./routes/assignments'));
 app.use('/api/tasks', requireAdminRole, require('./routes/tasks'));
 app.use('/api/partners', requireAdminRole, require('./routes/partners'));
 app.use('/api/drivers', requireAdminRole, require('./routes/drivers'));
+// Volunteers: external/non-club-member helpers granted direct access to
+// specific modules (no committee needed) — see server/routes/volunteers.js.
+app.use('/api/volunteers', requireAdminRole, require('./routes/volunteers'));
 // Self-service portals — each does its own auth + ownership scoping rather
 // than a blanket admin gate, so the linked person only ever sees their own
-// data (their assignments, their trips, their partner's fleet).
+// data (their assignments, their trips, their partner's fleet, their granted modules).
 app.use('/api/host', require('./routes/host'));
 app.use('/api/driver-portal', require('./routes/driverPortal'));
 app.use('/api/transporter-portal', require('./routes/transporterPortal'));
+app.use('/api/volunteer', require('./routes/volunteerSelf'));
 
 // --- Committee-granted module access ---
 // Same route handlers as the admin-only mounts below, exposed a second time

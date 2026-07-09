@@ -1,7 +1,8 @@
 // Web Push subscription management + admin broadcast tool. Any logged-in
-// role (host_member, media, transporter, driver, admin, super_admin) can
-// subscribe/unsubscribe their own browser; only admin/super_admin can send a
-// manual broadcast (the "event announcements" use case).
+// role (host_member, media, transporter, driver, volunteer, admin,
+// super_admin) can subscribe/unsubscribe their own browser; only
+// admin/super_admin can send a manual broadcast (the "event announcements"
+// use case).
 const express = require('express');
 const db = require('../db');
 const { requireAuth, requireAdminRole } = require('../auth');
@@ -41,7 +42,7 @@ router.delete('/subscribe', requireAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
-const BROADCAST_ROLES = ['all', 'admin', 'super_admin', 'host_member', 'media', 'transporter', 'driver'];
+const BROADCAST_ROLES = ['all', 'admin', 'super_admin', 'host_member', 'media', 'transporter', 'driver', 'volunteer'];
 
 // Admin/super_admin only — send a manual notification to everyone, or to one
 // or more specific roles. This is the "event announcements" tool.

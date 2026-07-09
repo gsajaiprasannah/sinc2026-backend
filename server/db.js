@@ -136,7 +136,7 @@ async function initSchema() {
       username TEXT NOT NULL UNIQUE,
       email TEXT,
       password_hash TEXT NOT NULL,
-      role TEXT NOT NULL DEFAULT 'admin' CHECK (role IN ('super_admin','admin','host_member','media','transporter','driver')),
+      role TEXT NOT NULL DEFAULT 'admin' CHECK (role IN ('super_admin','admin','host_member','media','transporter','driver','volunteer')),
       status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected','disabled')),
       created_at TIMESTAMP DEFAULT NOW(),
       approved_at TIMESTAMP,
@@ -579,12 +579,42 @@ async function initSchema() {
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS driver_id INTEGER REFERENCES drivers(id) ON DELETE SET NULL;`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS partner_id INTEGER REFERENCES partners(id) ON DELETE SET NULL;`);
 
+  // --- Volunteers: external / non-club-member helpers brought in for data ---
+  // entry (e.g. hired temp staff processing delegate registrations), as
+  // distinct from 'host_member' (an actual Skål Coimbatore club member who
+  // pays the ₹5000 host contribution and sits on committees). A volunteer
+  // has none of that — just a name/contact and whichever modules an admin
+  // grants them DIRECTLY (no committee membership required, unlike
+  // host_member's committee-based committee_module_access). See
+  // server/routes/volunteers.js and committeeModuleAccess.js.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS volunteers (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      phone TEXT,
+      email TEXT,
+      organization TEXT,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS volunteer_module_access (
+      id SERIAL PRIMARY KEY,
+      volunteer_id INTEGER NOT NULL REFERENCES volunteers(id) ON DELETE CASCADE,
+      module_key TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE (volunteer_id, module_key)
+    );
+  `);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS volunteer_id INTEGER REFERENCES volunteers(id) ON DELETE SET NULL;`);
+
   // Older databases created before 'host_member' (and now 'media'/
-  // 'transporter'/'driver') were added to the CHECK constraint need it
-  // relaxed, since Postgres won't alter CHECK constraints in place — drop
-  // and recreate.
+  // 'transporter'/'driver'/'volunteer') were added to the CHECK constraint
+  // need it relaxed, since Postgres won't alter CHECK constraints in place —
+  // drop and recreate.
   await pool.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;`);
-  await pool.query(`ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('super_admin','admin','host_member','media','transporter','driver'));`);
+  await pool.query(`ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('super_admin','admin','host_member','media','transporter','driver','volunteer'));`);
 
   // Older databases created before 'congress_only' was added to reg_type need
   // the CHECK constraint relaxed (Postgres won't alter CHECK constraints in

@@ -36,26 +36,40 @@ function isValidModuleKey(key) {
 }
 
 // Express middleware factory — gates a mounted router on whether the
-// logged-in host member belongs to a committee that's been granted
-// moduleKey. Admins/super_admins pass straight through (they already have
-// full access via the regular admin-only mount of the same router).
+// logged-in user has access to moduleKey. Admins/super_admins pass straight
+// through (they already have full access via the regular admin-only mount
+// of the same router). Two very different grant mechanisms feed into this:
+//   - host_member: indirect, via committee membership (committee_module_access)
+//   - volunteer: direct, per-person (volunteer_module_access) — volunteers
+//     are external/non-club-member helpers with no committee to belong to,
+//     see server/routes/volunteers.js
 function requireModuleAccess(moduleKey) {
   return function (req, res, next) {
     requireAuth(req, res, async () => {
       if (['admin', 'super_admin'].includes(req.user.role)) return next();
-      if (req.user.role !== 'host_member') {
-        return res.status(403).json({ error: 'This module is only available to host members via their committee.' });
-      }
       try {
-        const row = await db.get(
-          `SELECT 1 AS ok FROM users u
-           JOIN committee_members cm ON cm.host_member_id = u.host_member_id
-           JOIN committee_module_access cma ON cma.committee_id = cm.committee_id AND cma.module_key = $2
-           WHERE u.id = $1 LIMIT 1`,
-          [req.user.id, moduleKey]
-        );
-        if (!row) return res.status(403).json({ error: 'Your committee does not have access to this module.' });
-        next();
+        if (req.user.role === 'host_member') {
+          const row = await db.get(
+            `SELECT 1 AS ok FROM users u
+             JOIN committee_members cm ON cm.host_member_id = u.host_member_id
+             JOIN committee_module_access cma ON cma.committee_id = cm.committee_id AND cma.module_key = $2
+             WHERE u.id = $1 LIMIT 1`,
+            [req.user.id, moduleKey]
+          );
+          if (!row) return res.status(403).json({ error: 'Your committee does not have access to this module.' });
+          return next();
+        }
+        if (req.user.role === 'volunteer') {
+          const row = await db.get(
+            `SELECT 1 AS ok FROM users u
+             JOIN volunteer_module_access vma ON vma.volunteer_id = u.volunteer_id AND vma.module_key = $2
+             WHERE u.id = $1 LIMIT 1`,
+            [req.user.id, moduleKey]
+          );
+          if (!row) return res.status(403).json({ error: 'You have not been granted access to this module.' });
+          return next();
+        }
+        return res.status(403).json({ error: 'This module is only available to host members or volunteers who have been granted access.' });
       } catch (e) {
         res.status(500).json({ error: e.message });
       }
@@ -76,4 +90,14 @@ async function grantedModulesForHostMember(hostMemberId) {
   return rows.map((r) => r.module_key);
 }
 
-module.exports = { MODULE_KEYS, isValidModuleKey, requireModuleAccess, grantedModulesForHostMember };
+// Same idea for a volunteer — but direct (no committee join), since a
+// volunteer's access is granted straight to them by an admin.
+async function grantedModulesForVolunteer(volunteerId) {
+  const rows = await db.all(
+    `SELECT module_key FROM volunteer_module_access WHERE volunteer_id = $1 ORDER BY module_key`,
+    [volunteerId]
+  );
+  return rows.map((r) => r.module_key);
+}
+
+module.exports = { MODULE_KEYS, isValidModuleKey, requireModuleAccess, grantedModulesForHostMember, grantedModulesForVolunteer };

@@ -8,7 +8,7 @@ function publicUser(u) {
   return {
     id: u.id, username: u.username, email: u.email, role: u.role, status: u.status,
     created_at: u.created_at, approved_at: u.approved_at,
-    host_member_id: u.host_member_id, driver_id: u.driver_id, partner_id: u.partner_id
+    host_member_id: u.host_member_id, driver_id: u.driver_id, partner_id: u.partner_id, volunteer_id: u.volunteer_id
   };
 }
 
@@ -17,9 +17,10 @@ function publicUser(u) {
 const LINKED_ROLE_FIELDS = {
   host_member: { column: 'host_member_id', table: 'host_members', label: 'host member' },
   driver: { column: 'driver_id', table: 'drivers', label: 'driver' },
-  transporter: { column: 'partner_id', table: 'partners', label: 'transport partner' }
+  transporter: { column: 'partner_id', table: 'partners', label: 'transport partner' },
+  volunteer: { column: 'volunteer_id', table: 'volunteers', label: 'volunteer' }
 };
-const ALL_ROLES = ['super_admin', 'admin', 'host_member', 'media', 'transporter', 'driver'];
+const ALL_ROLES = ['super_admin', 'admin', 'host_member', 'media', 'transporter', 'driver', 'volunteer'];
 
 // --- Self-service signup: creates a PENDING account. Cannot log in until a ---
 // --- super admin approves it from the Settings panel.                     ---
@@ -81,29 +82,30 @@ router.put('/me/password', requireAuth, async (req, res) => {
 // --- Settings panel: user management — super_admin only ---
 router.get('/users', requireSuperAdmin, async (req, res) => {
   const rows = await db.all(`
-    SELECT u.*, hm.name AS host_member_name, dr.name AS driver_name, pt.name AS partner_name
+    SELECT u.*, hm.name AS host_member_name, dr.name AS driver_name, pt.name AS partner_name, vo.name AS volunteer_name
     FROM users u
     LEFT JOIN host_members hm ON hm.id = u.host_member_id
     LEFT JOIN drivers dr ON dr.id = u.driver_id
     LEFT JOIN partners pt ON pt.id = u.partner_id
+    LEFT JOIN volunteers vo ON vo.id = u.volunteer_id
     ORDER BY (u.status='pending') DESC, u.created_at DESC
   `);
-  res.json(rows.map((u) => ({ ...publicUser(u), host_member_name: u.host_member_name, driver_name: u.driver_name, partner_name: u.partner_name })));
+  res.json(rows.map((u) => ({ ...publicUser(u), host_member_name: u.host_member_name, driver_name: u.driver_name, partner_name: u.partner_name, volunteer_name: u.volunteer_name })));
 });
 
 // "Generate a login" — directly create an already-approved account.
 // role can be 'admin', 'super_admin', 'host_member', 'media', 'transporter',
-// or 'driver'. host_member/driver/transporter logins must also supply the
-// matching linked-record id (LINKED_ROLE_FIELDS above) so the account is
-// scoped to that specific person/company — 'media' has no linked record,
-// it's just a restricted-scope role.
+// 'driver', or 'volunteer'. host_member/driver/transporter/volunteer logins
+// must also supply the matching linked-record id (LINKED_ROLE_FIELDS above)
+// so the account is scoped to that specific person/company — 'media' has no
+// linked record, it's just a restricted-scope role.
 router.post('/users', requireSuperAdmin, async (req, res) => {
-  const { username, email, password, role, host_member_id, driver_id, partner_id } = req.body;
+  const { username, email, password, role, host_member_id, driver_id, partner_id, volunteer_id } = req.body;
   if (!username || !password) return res.status(400).json({ error: 'Username and password are required.' });
   if (String(password).length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters.' });
   const finalRole = ALL_ROLES.includes(role) ? role : 'admin';
   const linked = LINKED_ROLE_FIELDS[finalRole];
-  const linkedValues = { host_member_id: host_member_id || null, driver_id: driver_id || null, partner_id: partner_id || null };
+  const linkedValues = { host_member_id: host_member_id || null, driver_id: driver_id || null, partner_id: partner_id || null, volunteer_id: volunteer_id || null };
   if (linked && !linkedValues[linked.column]) {
     return res.status(400).json({ error: `Choose which ${linked.label} this login belongs to.` });
   }
@@ -112,12 +114,13 @@ router.post('/users', requireSuperAdmin, async (req, res) => {
     if (existing) return res.status(409).json({ error: 'That username already exists.' });
     const hash = await hashPassword(password);
     const result = await db.run(
-      `INSERT INTO users (username, email, password_hash, role, status, approved_at, approved_by, host_member_id, driver_id, partner_id)
-       VALUES ($1,$2,$3,$4,'approved',NOW(),$5,$6,$7,$8) RETURNING id`,
+      `INSERT INTO users (username, email, password_hash, role, status, approved_at, approved_by, host_member_id, driver_id, partner_id, volunteer_id)
+       VALUES ($1,$2,$3,$4,'approved',NOW(),$5,$6,$7,$8,$9) RETURNING id`,
       [username.trim(), (email || '').trim(), hash, finalRole, req.user.id,
         linked?.column === 'host_member_id' ? linkedValues.host_member_id : null,
         linked?.column === 'driver_id' ? linkedValues.driver_id : null,
-        linked?.column === 'partner_id' ? linkedValues.partner_id : null]
+        linked?.column === 'partner_id' ? linkedValues.partner_id : null,
+        linked?.column === 'volunteer_id' ? linkedValues.volunteer_id : null]
     );
     res.json({ id: result.id });
   } catch (e) {
