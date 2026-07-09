@@ -11,9 +11,20 @@ const FIELDS = [
   'registration_id', 'is_primary', 'name', 'phone', 'whatsapp', 'email', 'address', 'club_id', 'designation',
   'dietary_preference',
   'travel_mode', 'travel_number', 'travel_datetime', 'arrival_point',
-  'departure_mode', 'departure_number', 'departure_datetime',
+  'departure_mode', 'departure_number', 'departure_datetime', 'departure_point',
   'pickup_by', 'pickup_vehicle', 'pickup_phone', 'spoc_name', 'spoc_phone', 'notes'
 ];
+
+// Core identity/registration fields — once a delegate exists, only a super
+// admin can change these (everyone else can still freely edit travel info,
+// pickup/SPOC, notes, etc.). Enforced here server-side (not just hidden/
+// disabled in the admin UI) so a non-super-admin can't bypass the freeze via
+// a direct API call — same pattern as the global super-admin-only DELETE
+// restriction enforced in server/index.js.
+const FROZEN_FIELDS = ['name', 'phone', 'club_id', 'registration_id'];
+function normalizeForCompare(v) {
+  return v === undefined || v === null ? '' : String(v);
+}
 
 // --- Duplicate-entry protection ---
 // The same person often gets entered more than once (a CSV re-import, a
@@ -150,6 +161,18 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   const body = req.body;
   try {
+    if (req.user && req.user.role !== 'super_admin') {
+      const current = await db.get('SELECT name, phone, club_id, registration_id FROM participants WHERE id=$1', [req.params.id]);
+      if (!current) return res.status(404).json({ error: 'Delegate not found.' });
+      const changedFrozen = FROZEN_FIELDS.filter(
+        (f) => body[f] !== undefined && normalizeForCompare(body[f]) !== normalizeForCompare(current[f])
+      );
+      if (changedFrozen.length) {
+        return res.status(403).json({
+          error: `Only a super admin can change ${changedFrozen.join(', ')} for an existing delegate.`
+        });
+      }
+    }
     if (!body.force && (body.name !== undefined || body.phone !== undefined || body.email !== undefined)) {
       const current = await db.get('SELECT name, phone, email FROM participants WHERE id=$1', [req.params.id]);
       const candidate = {
@@ -211,9 +234,9 @@ router.post('/bulk-upload', upload.single('file'), async (req, res) => {
           INSERT INTO participants
             (registration_id, is_primary, name, phone, whatsapp, email, address, club_id, designation, dietary_preference,
              travel_mode, travel_number, travel_datetime, arrival_point,
-             departure_mode, departure_number, departure_datetime,
+             departure_mode, departure_number, departure_datetime, departure_point,
              pickup_by, pickup_vehicle, pickup_phone, spoc_name, spoc_phone, notes)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
         `, [
           reg ? reg.id : null,
           r.is_primary !== undefined ? Number(r.is_primary) : 1,
@@ -232,6 +255,7 @@ router.post('/bulk-upload', upload.single('file'), async (req, res) => {
           r.departure_mode || null,
           r.departure_number || '',
           r.departure_datetime || '',
+          r.departure_point || '',
           r.pickup_by || '',
           r.pickup_vehicle || '',
           r.pickup_phone || '',

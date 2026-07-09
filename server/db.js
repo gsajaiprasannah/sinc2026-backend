@@ -101,6 +101,7 @@ async function initSchema() {
       departure_mode TEXT CHECK (departure_mode IN ('flight','train','road','other') OR departure_mode IS NULL),
       departure_number TEXT,
       departure_datetime TEXT,
+      departure_point TEXT,
       pickup_by TEXT,
       pickup_vehicle TEXT,
       pickup_phone TEXT,
@@ -593,6 +594,7 @@ async function initSchema() {
 
   // Safe to run repeatedly — adds the column only if an older schema is missing it.
   await pool.query(`ALTER TABLE participants ADD COLUMN IF NOT EXISTS dietary_preference TEXT;`);
+  await pool.query(`ALTER TABLE participants ADD COLUMN IF NOT EXISTS departure_point TEXT;`);
 
   // --- Per-participant Registration ID (e.g. SINC2026-0001) ---
   // One code per participant row, assigned automatically on insert via a DB

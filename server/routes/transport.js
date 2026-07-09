@@ -89,14 +89,15 @@ router.get('/arrivals-queue', async (req, res) => {
 });
 
 // Same idea in reverse — delegates with departure details not yet on a
-// departure trip. There's no separate "departure point" field on a
-// delegate (most people depart from the same airport/station they arrived
-// through), so arrival_point doubles as the shared terminal reference here.
+// departure trip. Groups on the delegate's own departure_point where set;
+// falls back to arrival_point for older rows saved before that field
+// existed (most people depart from the same airport/station they arrived
+// through, so it's a reasonable default, but no longer the only source).
 router.get('/departures-queue', async (req, res) => {
   try {
     const rows = await db.all(`
       SELECT p.departure_mode AS travel_mode, p.departure_number AS travel_number,
-        p.departure_datetime AS travel_datetime, p.arrival_point,
+        p.departure_datetime AS travel_datetime, COALESCE(p.departure_point, p.arrival_point) AS departure_point,
         json_agg(json_build_object(
           'id', p.id, 'name', p.name, 'phone', p.phone, 'participant_code', p.participant_code,
           'club_name', c.name, 'reg_number', r.reg_number,
@@ -116,7 +117,7 @@ router.get('/departures-queue', async (req, res) => {
           JOIN transport_trips t ON t.id = tp.trip_id
           WHERE tp.participant_id = p.id AND t.trip_type = 'departure'
         )
-      GROUP BY p.departure_mode, p.departure_number, p.departure_datetime, p.arrival_point
+      GROUP BY p.departure_mode, p.departure_number, p.departure_datetime, COALESCE(p.departure_point, p.arrival_point)
       ORDER BY p.departure_datetime, p.departure_number
     `);
     res.json(rows);
