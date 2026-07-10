@@ -252,17 +252,30 @@ router.post('/outward/:id/mark-paid', async (req, res) => {
   }
 });
 
-// Cancel/withdraw a request — only while pending or already rejected (never
-// once money has actually moved). Only super_admin reaches this at all
-// thanks to the global "DELETE requires super_admin" gate in server/index.js.
+// Cancel/withdraw a request (pending/rejected/approved), or — super_admin
+// only, with explicit confirmation — permanently remove one that's already
+// been marked paid. Only super_admin reaches this route at all thanks to the
+// global "DELETE requires super_admin" gate in server/index.js; the extra
+// ?confirm=true requirement below is a second, deliberate speed bump so a
+// paid financial record (already reflected in the summary/reports) can never
+// be wiped out by a single stray click — the UI shows a strong warning
+// dialog before it ever sends that flag.
 router.delete('/outward/:id', async (req, res) => {
   const existing = await db.get(`SELECT * FROM finance_transactions WHERE id=$1 AND type='outward'`, [req.params.id]);
   if (!existing) return res.status(404).json({ error: 'Not found' });
-  if (existing.status === 'paid') {
-    return res.status(409).json({ error: 'A paid transaction cannot be deleted — it is part of the financial record.' });
+  if (existing.status === 'paid' && req.query.confirm !== 'true') {
+    return res.status(409).json({
+      error: 'This is a PAID transaction that is part of the financial record. Deleting it is permanent and cannot be undone. Confirm to proceed.',
+      requiresConfirm: true,
+    });
   }
   await db.run(`DELETE FROM finance_transactions WHERE id=$1`, [req.params.id]);
-  logActivity(req.user, { action: 'delete', entityType: 'finance_outward', entityId: Number(req.params.id), label: existing.payee_or_payer || existing.purchase_item_name });
+  logActivity(req.user, {
+    action: 'delete',
+    entityType: 'finance_outward',
+    entityId: Number(req.params.id),
+    label: (existing.payee_or_payer || existing.purchase_item_name) + (existing.status === 'paid' ? ' (was PAID — removed by super admin)' : ''),
+  });
   res.json({ ok: true });
 });
 
