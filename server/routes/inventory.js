@@ -273,7 +273,7 @@ router.get('/monitor/summary', async (req, res) => {
 
 router.get('/monitor', async (req, res) => {
   try {
-    const { committee_id, status, recipient_type, inventory_item_id } = req.query;
+    const { committee_id, status, recipient_type, recipient_id, inventory_item_id } = req.query;
     const conditions = [];
     const params = [];
     if (committee_id !== undefined && committee_id !== '') {
@@ -286,6 +286,10 @@ router.get('/monitor', async (req, res) => {
     }
     if (status) { params.push(status); conditions.push(`d.status = $${params.length}`); }
     if (recipient_type) { params.push(recipient_type); conditions.push(`d.recipient_type = $${params.length}`); }
+    // recipient_id is only meaningful alongside recipient_type (ids aren't
+    // unique across recipient tables), but the goodies-per-person modal
+    // always sends both together, so no extra validation needed here.
+    if (recipient_id) { params.push(recipient_id); conditions.push(`d.recipient_id = $${params.length}`); }
     if (inventory_item_id) { params.push(inventory_item_id); conditions.push(`d.inventory_item_id = $${params.length}`); }
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
     const rows = await db.all(`
