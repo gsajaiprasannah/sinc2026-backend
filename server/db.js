@@ -906,6 +906,84 @@ async function initSchema() {
   // Free text (not an enum) so admins can add a new office later without a
   // migration; the admin UI dropdown is the source of truth for the standard list.
   await pool.query(`ALTER TABLE host_members ADD COLUMN IF NOT EXISTS leadership_role TEXT;`);
+
+  // --- Stalls module: exhibition stall enquiry -> billing -> allocation ---
+  // Separate from Sponsors (a stall is a paid physical spot, not a
+  // sponsorship tier). The hall count/layout isn't finalized yet, so halls
+  // and stalls are both simple admin-managed masters: create a Hall, then
+  // bulk-generate its stall numbers (or add them one at a time) once the
+  // venue plan firms up — never hardcoded. A stall's price can vary per
+  // stall (corner vs. regular, hall-to-hall), so price lives on the stall
+  // row itself rather than as one global constant.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS stall_halls (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      capacity INTEGER,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+
+  // A single physical stall inside a hall. status is a simple derived flag
+  // ('available' | 'allocated') kept in sync by stall_bookings.js whenever a
+  // booking is allocated/released/cancelled — so the Halls & Stalls tab can
+  // show availability at a glance without joining through bookings.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS stalls (
+      id SERIAL PRIMARY KEY,
+      hall_id INTEGER NOT NULL REFERENCES stall_halls(id) ON DELETE CASCADE,
+      stall_number TEXT NOT NULL,
+      size TEXT,
+      price NUMERIC NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'available' CHECK (status IN ('available','allocated')),
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE(hall_id, stall_number)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS stalls_hall_idx ON stalls(hall_id);`);
+
+  // The enquiry -> billed -> allocated workflow itself. One stall per
+  // booking (a company wanting several stalls submits several enquiries).
+  // The buyer is always an outside exhibitor/vendor company — not
+  // necessarily a Skål club or host member — so contact details are
+  // captured directly here rather than linked to host_members.
+  // stall_id is only set once a hall/stall has actually been allocated;
+  // it stays on the row even if later cancelled, so "who had this stall"
+  // remains visible in history — the partial unique index below is what
+  // actually frees the stall back up for a new booking.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS stall_bookings (
+      id SERIAL PRIMARY KEY,
+      company_name TEXT NOT NULL,
+      contact_person TEXT,
+      phone TEXT,
+      email TEXT,
+      gstin TEXT,
+      requirement_notes TEXT,
+      stall_id INTEGER REFERENCES stalls(id) ON DELETE SET NULL,
+      status TEXT NOT NULL DEFAULT 'enquiry' CHECK (status IN ('enquiry','billed','allocated','cancelled')),
+      amount NUMERIC NOT NULL DEFAULT 0,
+      payment_status TEXT NOT NULL DEFAULT 'pending' CHECK (payment_status IN ('pending','paid')),
+      payment_mode TEXT,
+      payment_date DATE,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+  // A stall can only be the live (non-cancelled) allocation for ONE
+  // booking at a time — this is the actual guarantee against double-booking
+  // a stall, enforced at the DB level in addition to the app-level check in
+  // stallBookings.js. Cancelled bookings are excluded so the same stall can
+  // be re-allocated to someone else afterwards.
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS stall_bookings_active_stall_idx
+    ON stall_bookings(stall_id) WHERE stall_id IS NOT NULL AND status <> 'cancelled';
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS stall_bookings_stall_idx ON stall_bookings(stall_id);`);
 }
 
 module.exports = { pool, all, get, run, transaction, initSchema };

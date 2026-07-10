@@ -135,6 +135,15 @@ app.use('/api/rooms', requireAdminRole, require('./routes/rooms'));
 // did + when), tagged to a responsible committee per item.
 app.use('/api/inventory', requireAdminRole, require('./routes/inventory'));
 
+// --- Stalls: exhibition stall enquiry -> billing -> allocation. Halls and
+// stalls are admin-managed masters (the venue's final hall/stall count
+// isn't fixed yet); stall_bookings.js carries the enquiry through billed
+// and allocated, tracking which company holds which stall and their
+// payment, with a receipt PDF built the same way as the other receipts.
+app.use('/api/stall-halls', requireAdminRole, require('./routes/stallHalls'));
+app.use('/api/stalls', requireAdminRole, require('./routes/stalls'));
+app.use('/api/stall-bookings', requireAdminRole, require('./routes/stallBookings'));
+
 // --- Sponsors, Guest Speakers, Guest Visitors — each with their own ---
 // customizable checklist (benefits / what-must-reach-them / offerings). ---
 // /api/checklist-items is the single shared edit/delete-by-id endpoint used ---
