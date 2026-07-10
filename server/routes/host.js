@@ -9,6 +9,7 @@ const { requireAuth } = require('../auth');
 const push = require('../pushHelper');
 const { grantedModulesForHostMember } = require('./committeeModuleAccess');
 const { logActivity } = require('../lib/activityLogger');
+const { finalizeApprovalIfReady } = require('../lib/financeHelper');
 
 const router = express.Router();
 
@@ -687,6 +688,78 @@ router.get('/leadership-briefing', requireLeadershipHostMember, async (req, res)
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// --- Finance approvals ---
+// The Finance module's outward payments/purchases require sign-off from
+// specific office-bearer roles (President/Secretary/Treasurer/Congress
+// Chairman/Congress Treasurer for a plain payment; just President+Treasurer
+// for a goodies purchase). Whoever is CURRENTLY tagged with a given
+// leadership_role can act on that role's approval slot — this endpoint
+// looks up pending slots matching the logged-in host member's own role,
+// not by name, so re-tagging the role to someone else just works.
+router.get('/finance/approvals', requireLeadershipHostMember, async (req, res) => {
+  try {
+    const rows = await db.all(`
+      SELECT fta.id AS approval_id, fta.required_role, fta.status AS my_status, ft.*
+      FROM finance_transaction_approvals fta
+      JOIN finance_transactions ft ON ft.id = fta.transaction_id
+      WHERE fta.required_role = $1 AND fta.status = 'pending' AND ft.status = 'pending_approval'
+      ORDER BY ft.created_at ASC
+    `, [req.leadershipRole]);
+    res.json({ role: req.leadershipRole, pending: rows });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Recent decisions made by this office-bearer — a simple personal history
+// so they can see what they've already acted on.
+router.get('/finance/approvals/history', requireLeadershipHostMember, async (req, res) => {
+  try {
+    const rows = await db.all(`
+      SELECT fta.id AS approval_id, fta.required_role, fta.status AS my_status, fta.decided_at, fta.remarks, ft.*
+      FROM finance_transaction_approvals fta
+      JOIN finance_transactions ft ON ft.id = fta.transaction_id
+      WHERE fta.approved_by_host_member_id = $1 AND fta.status != 'pending'
+      ORDER BY fta.decided_at DESC
+      LIMIT 30
+    `, [req.hostMemberId]);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post('/finance/approvals/:approvalId/decide', requireLeadershipHostMember, async (req, res) => {
+  const { decision, remarks } = req.body;
+  if (!['approved', 'rejected'].includes(decision)) {
+    return res.status(400).json({ error: "decision must be 'approved' or 'rejected'" });
+  }
+  try {
+    const approval = await db.get(`SELECT * FROM finance_transaction_approvals WHERE id=$1`, [req.params.approvalId]);
+    if (!approval) return res.status(404).json({ error: 'Approval not found' });
+    if (approval.required_role !== req.leadershipRole) {
+      return res.status(403).json({ error: `This approval belongs to the ${approval.required_role} role, not ${req.leadershipRole}.` });
+    }
+    if (approval.status !== 'pending') {
+      return res.status(409).json({ error: `You already ${approval.status} this one.` });
+    }
+    await db.run(`
+      UPDATE finance_transaction_approvals SET status=$1, approved_by_host_member_id=$2, decided_at=NOW(), remarks=$3
+      WHERE id=$4
+    `, [decision, req.hostMemberId, remarks || null, req.params.approvalId]);
+    const finalStatus = await finalizeApprovalIfReady(approval.transaction_id);
+    logActivity(req.user, {
+      action: decision === 'approved' ? 'approve' : 'reject',
+      entityType: 'finance_transaction',
+      entityId: approval.transaction_id,
+      label: `${req.leadershipRole} ${decision} it`
+    });
+    res.json({ ok: true, transaction_status: finalStatus });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
   }
 });
 
