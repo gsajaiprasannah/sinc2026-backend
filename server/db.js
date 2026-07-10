@@ -984,6 +984,64 @@ async function initSchema() {
     ON stall_bookings(stall_id) WHERE stall_id IS NOT NULL AND status <> 'cancelled';
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS stall_bookings_stall_idx ON stall_bookings(stall_id);`);
+
+  // --- Agenda (event management within the Itinerary module) ---
+  // A congress itinerary slot (e.g. "Inaugural Ceremony", 7:00 PM) is a
+  // container in the public-facing itinerary_items table above. Within that
+  // slot there's a detailed run-of-show — the actual flow of individual
+  // events (Prayer Song, National Anthem, dance performances, etc.) needed
+  // so agenda prep goes flawlessly. Kept admin-only for now (not surfaced on
+  // the public site), one level below itinerary_items.
+  //
+  // performer_groups must exist before agenda_events references it.
+  // Hired performing groups/vendors for the program, tracked with a simple
+  // pending/paid fee — same payment shape as host_members' contribution,
+  // not the partial-payment shape used for delegate registrations.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS performer_groups (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      category TEXT,
+      contact_person TEXT,
+      phone TEXT,
+      email TEXT,
+      fee_amount NUMERIC NOT NULL DEFAULT 0,
+      payment_status TEXT NOT NULL DEFAULT 'pending' CHECK (payment_status IN ('pending','paid')),
+      payment_mode TEXT,
+      payment_date DATE,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+
+  // One row per event within an itinerary slot's agenda. organizing_committee_id
+  // reuses the same "responsible committee" pattern as checklist_items/
+  // inventory_items (with organized_by as a free-text supplement/fallback for
+  // organizers that aren't a host committee); performer_group_id links to a
+  // hired group above (with performed_by as a free-text fallback for
+  // individual/ad hoc performers not represented by a formal group).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS agenda_events (
+      id SERIAL PRIMARY KEY,
+      itinerary_item_id INTEGER NOT NULL REFERENCES itinerary_items(id) ON DELETE CASCADE,
+      time_label TEXT,
+      title TEXT NOT NULL,
+      description TEXT,
+      organizing_committee_id INTEGER REFERENCES committees(id) ON DELETE SET NULL,
+      organized_by TEXT,
+      performer_group_id INTEGER REFERENCES performer_groups(id) ON DELETE SET NULL,
+      performed_by TEXT,
+      duration_minutes INTEGER,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS agenda_events_itinerary_idx ON agenda_events(itinerary_item_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS agenda_events_committee_idx ON agenda_events(organizing_committee_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS agenda_events_performer_idx ON agenda_events(performer_group_id);`);
 }
 
 module.exports = { pool, all, get, run, transaction, initSchema };

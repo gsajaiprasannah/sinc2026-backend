@@ -144,6 +144,14 @@ app.use('/api/stall-halls', requireAdminRole, require('./routes/stallHalls'));
 app.use('/api/stalls', requireAdminRole, require('./routes/stalls'));
 app.use('/api/stall-bookings', requireAdminRole, require('./routes/stallBookings'));
 
+// --- Agenda (event management under Itinerary): the detailed run-of-show ---
+// within a congress itinerary slot (Prayer Song, National Anthem, dance
+// performances, etc.), each with a description, organizer, and performer —
+// plus a performer_groups master for hired performing groups/vendors and
+// their payment. Admin-only for now (not surfaced on the public itinerary).
+app.use('/api/agenda', requireAdminRole, require('./routes/agenda'));
+app.use('/api/performer-groups', requireAdminRole, require('./routes/performerGroups'));
+
 // --- Sponsors, Guest Speakers, Guest Visitors — each with their own ---
 // customizable checklist (benefits / what-must-reach-them / offerings). ---
 // /api/checklist-items is the single shared edit/delete-by-id endpoint used ---
