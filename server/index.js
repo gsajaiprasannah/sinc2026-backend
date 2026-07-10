@@ -152,6 +152,17 @@ app.use('/api/stall-bookings', requireAdminRole, require('./routes/stallBookings
 app.use('/api/agenda', requireAdminRole, require('./routes/agenda'));
 app.use('/api/performer-groups', requireAdminRole, require('./routes/performerGroups'));
 
+// --- Finance: inward/outward money tracking + payment approvals ---
+// Inward is mostly a read-only rollup of payments already recorded by other
+// modules (registrations, host member fees, stall bookings, pre-tours) plus
+// manual entries. Outward payments and goodies purchase requests both need
+// sign-off from specific office-bearer roles before they're actioned — the
+// actual approve/reject action happens from the approver's own self-service
+// portal login (see /api/host/finance/approvals in host.js), not here; this
+// admin-only router is for creating requests, viewing progress, and
+// marking a fully-approved one as paid.
+app.use('/api/finance', requireAdminRole, require('./routes/finance'));
+
 // --- Sponsors, Guest Speakers, Guest Visitors — each with their own ---
 // customizable checklist (benefits / what-must-reach-them / offerings). ---
 // /api/checklist-items is the single shared edit/delete-by-id endpoint used ---

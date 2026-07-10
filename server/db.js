@@ -1042,6 +1042,127 @@ async function initSchema() {
   await pool.query(`CREATE INDEX IF NOT EXISTS agenda_events_itinerary_idx ON agenda_events(itinerary_item_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS agenda_events_committee_idx ON agenda_events(organizing_committee_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS agenda_events_performer_idx ON agenda_events(performer_group_id);`);
+
+  // --- Finance module: inward/outward money tracking + payment approvals ---
+  // A single table covers three kinds of rows via type/subtype:
+  //   type='inward'  (subtype NULL)     -> a manual inward entry (donation,
+  //                                        grant, etc. not already captured
+  //                                        by another module's own payment
+  //                                        fields). Status is always 'recorded'.
+  //   type='outward', subtype='payment' -> a vendor/expense payment request.
+  //                                        Needs unanimous approval from ALL
+  //                                        FIVE office-bearers (President,
+  //                                        Secretary, Treasurer, Congress
+  //                                        Chairman, Congress Treasurer)
+  //                                        before it can be marked paid.
+  //   type='outward', subtype='purchase'-> a purchase request for a goodies/
+  //                                        inventory item. Needs approval
+  //                                        from just President + Treasurer
+  //                                        (lighter than a plain payment).
+  //                                        The moment BOTH approve, the
+  //                                        matching inventory_items row is
+  //                                        created/incremented automatically
+  //                                        (see server/lib/financeHelper.js) —
+  //                                        this is deliberately the ONLY path
+  //                                        that auto-populates inventory from
+  //                                        a real procurement decision; the
+  //                                        existing Goodies & Inventory tab's
+  //                                        manual add is left in place for
+  //                                        already-owned stock / corrections.
+  // The big "inward" picture (what money has actually come in) also includes
+  // payments already recorded by other modules — registrations, host member
+  // fees, stall bookings, pre-tour payments — which is why finance_inward_ledger
+  // below UNIONs those in read-only rather than duplicating the data here.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS finance_transactions (
+      id SERIAL PRIMARY KEY,
+      type TEXT NOT NULL CHECK (type IN ('inward','outward')),
+      subtype TEXT CHECK (subtype IS NULL OR subtype IN ('payment','purchase')),
+      category TEXT,
+      payee_or_payer TEXT,
+      amount NUMERIC NOT NULL DEFAULT 0,
+      description TEXT,
+      transaction_date DATE,
+      payment_mode TEXT,
+      status TEXT NOT NULL DEFAULT 'recorded',
+      purchase_item_name TEXT,
+      purchase_category TEXT,
+      purchase_unit TEXT,
+      purchase_quantity NUMERIC,
+      purchase_unit_cost NUMERIC,
+      inventory_item_id INTEGER REFERENCES inventory_items(id) ON DELETE SET NULL,
+      notes TEXT,
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS finance_transactions_type_idx ON finance_transactions(type);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS finance_transactions_subtype_idx ON finance_transactions(subtype);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS finance_transactions_status_idx ON finance_transactions(status);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS finance_transactions_inventory_idx ON finance_transactions(inventory_item_id);`);
+
+  // One row per required approver ROLE (not person) on an outward
+  // transaction — e.g. a 'payment' gets 5 rows (one per office-bearer role),
+  // a 'purchase' gets 2 (President, Treasurer). Whichever host_member
+  // currently holds that leadership_role can act on it. UNIQUE(transaction,role)
+  // means re-tagging a role to a different person mid-flight doesn't duplicate
+  // the pending approval slot.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS finance_transaction_approvals (
+      id SERIAL PRIMARY KEY,
+      transaction_id INTEGER NOT NULL REFERENCES finance_transactions(id) ON DELETE CASCADE,
+      required_role TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected')),
+      approved_by_host_member_id INTEGER REFERENCES host_members(id) ON DELETE SET NULL,
+      decided_at TIMESTAMP,
+      remarks TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE(transaction_id, required_role)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS finance_approvals_transaction_idx ON finance_transaction_approvals(transaction_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS finance_approvals_role_idx ON finance_transaction_approvals(required_role);`);
+
+  // Read-only consolidated view of every inward rupee across the congress:
+  // manual Finance entries UNIONed with payments already recorded by other
+  // modules (so this module doesn't need its own duplicate copy of that
+  // money). Recreated on every boot (CREATE OR REPLACE) so adding a new
+  // source later is just one more UNION branch.
+  await pool.query(`
+    CREATE OR REPLACE VIEW finance_inward_ledger AS
+      SELECT 'registration'::text AS source, r.id AS source_id, 'Registration Fee'::text AS category,
+             r.reg_number AS reference, r.amount_paid AS amount, r.payment_mode,
+             r.created_at::date AS transaction_date, NULL::text AS notes
+      FROM registrations r WHERE r.payment_status IN ('paid','partial') AND r.amount_paid > 0
+
+      UNION ALL
+      SELECT 'host_member', hm.id, 'Host Member Fee',
+             hm.name, hm.payment_amount, hm.payment_mode,
+             COALESCE(hm.payment_date, hm.created_at::date), NULL
+      FROM host_members hm WHERE hm.payment_status = 'paid'
+
+      UNION ALL
+      SELECT 'stall_booking', sb.id, 'Stall Booking',
+             sb.company_name, sb.amount, sb.payment_mode,
+             COALESCE(sb.payment_date, sb.created_at::date), NULL
+      FROM stall_bookings sb WHERE sb.payment_status = 'paid'
+
+      UNION ALL
+      SELECT 'pre_tour', ptp.id, 'Pre-Tour Payment',
+             pt.name || ' - ' || COALESCE(p.name, hm2.name, 'Unknown'), pt.price, NULL::text,
+             ptp.created_at::date, NULL
+      FROM pre_tour_participants ptp
+      JOIN pre_tours pt ON pt.id = ptp.pre_tour_id
+      LEFT JOIN participants p ON p.id = ptp.participant_id
+      LEFT JOIN host_members hm2 ON hm2.id = ptp.host_member_id
+      WHERE ptp.payment_status = 'paid' AND pt.price IS NOT NULL
+
+      UNION ALL
+      SELECT 'manual', ft.id, ft.category, ft.payee_or_payer, ft.amount, ft.payment_mode,
+             ft.transaction_date, ft.notes
+      FROM finance_transactions ft WHERE ft.type = 'inward';
+  `);
 }
 
 module.exports = { pool, all, get, run, transaction, initSchema };
