@@ -13,6 +13,19 @@ router.get('/', async (req, res) => {
   }
 });
 
+// Single-item lookup — needed by the admin panel's "Edit" flow (and now the
+// Agenda Builder's slot picker), which fetch one record by id rather than
+// filtering the full list client-side.
+router.get('/:id', async (req, res) => {
+  try {
+    const row = await db.get('SELECT * FROM itinerary_items WHERE id=$1', [req.params.id]);
+    if (!row) return res.status(404).json({ error: 'Itinerary item not found' });
+    res.json(row);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.post('/', async (req, res) => {
   const { day_label, time_label, title, description, sort_order } = req.body;
   if (!day_label || !title) return res.status(400).json({ error: 'day_label and title are required' });
