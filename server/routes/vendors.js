@@ -28,6 +28,24 @@ router.get('/', async (req, res) => {
   }
 });
 
+// All vendor products across every vendor, with the owning vendor's name —
+// powers the "quick pick" item dropdown on the Purchase Request form so an
+// item can be selected without retyping it, with its vendor auto-resolved.
+// Two path segments ("products"/"all"), so it can't collide with GET /:id.
+router.get('/products/all', async (req, res) => {
+  try {
+    const rows = await db.all(`
+      SELECT vp.id, vp.vendor_id, v.name AS vendor_name, vp.name, vp.category, vp.unit, vp.unit_price, vp.status
+      FROM vendor_products vp
+      JOIN vendors v ON v.id = vp.vendor_id
+      ORDER BY v.name, vp.name
+    `);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Vendor detail: profile + their own product catalog + everything ordered
 // from them across Purchase Requests (Finance) and Inventory Items
 // (Goodies & Inventory) — the "what is this vendor supplying, and what's the
