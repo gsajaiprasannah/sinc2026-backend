@@ -162,22 +162,32 @@ router.post('/outward', async (req, res) => {
 // approval from just President + Treasurer. amount is computed from
 // quantity x unit cost so the requester doesn't have to do the math.
 router.post('/purchases', async (req, res) => {
-  const { purchase_item_name, purchase_category, purchase_unit, purchase_quantity, purchase_unit_cost, payee_or_payer, description, transaction_date, notes } = req.body;
+  const { purchase_item_name, purchase_category, purchase_unit, purchase_quantity, purchase_unit_cost, payee_or_payer, description, transaction_date, notes, vendor_id, expected_delivery_date } = req.body;
   if (!purchase_item_name || !purchase_item_name.trim()) return res.status(400).json({ error: 'purchase_item_name is required' });
   const qty = Number(purchase_quantity) || 0;
   const unitCost = Number(purchase_unit_cost) || 0;
   if (qty <= 0) return res.status(400).json({ error: 'A positive quantity is required' });
   try {
+    // If a vendor is picked, auto-fill payee_or_payer from their name unless
+    // one was typed explicitly — keeps the existing free-text field usable
+    // for one-off vendors that aren't in the master yet.
+    let payee = payee_or_payer || '';
+    if (vendor_id && !payee.trim()) {
+      const v = await db.get('SELECT name FROM vendors WHERE id=$1', [vendor_id]);
+      if (v) payee = v.name;
+    }
     const amount = qty * unitCost;
     const result = await db.run(`
       INSERT INTO finance_transactions (
         type, subtype, category, payee_or_payer, amount, description, transaction_date, status, notes,
-        purchase_item_name, purchase_category, purchase_unit, purchase_quantity, purchase_unit_cost, created_by
+        purchase_item_name, purchase_category, purchase_unit, purchase_quantity, purchase_unit_cost, created_by,
+        vendor_id, expected_delivery_date
       )
-      VALUES ('outward','purchase',$1,$2,$3,$4,$5,'pending_approval',$6,$7,$8,$9,$10,$11,$12) RETURNING id
+      VALUES ('outward','purchase',$1,$2,$3,$4,$5,'pending_approval',$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id
     `, [
-      purchase_category || 'Goodies', payee_or_payer || '', amount, description || '', transaction_date || null, notes || '',
-      purchase_item_name.trim(), purchase_category || '', purchase_unit || 'pcs', qty, unitCost, req.user?.id || null
+      purchase_category || 'Goodies', payee, amount, description || '', transaction_date || null, notes || '',
+      purchase_item_name.trim(), purchase_category || '', purchase_unit || 'pcs', qty, unitCost, req.user?.id || null,
+      vendor_id || null, expected_delivery_date || null
     ]);
     await createApprovalRows(result.id, 'purchase');
     logActivity(req.user, { action: 'create', entityType: 'finance_purchase_request', entityId: result.id, label: purchase_item_name.trim() });
@@ -197,7 +207,7 @@ router.put('/outward/:id', async (req, res) => {
       return res.status(409).json({ error: `This request is already ${existing.status.replace('_', ' ')} and can no longer be edited.` });
     }
     if (existing.subtype === 'purchase') {
-      const { purchase_item_name, purchase_category, purchase_unit, purchase_quantity, purchase_unit_cost, payee_or_payer, description, transaction_date, notes } = req.body;
+      const { purchase_item_name, purchase_category, purchase_unit, purchase_quantity, purchase_unit_cost, payee_or_payer, description, transaction_date, notes, vendor_id, expected_delivery_date } = req.body;
       const qty = purchase_quantity !== undefined && purchase_quantity !== '' ? Number(purchase_quantity) : existing.purchase_quantity;
       const unitCost = purchase_unit_cost !== undefined && purchase_unit_cost !== '' ? Number(purchase_unit_cost) : existing.purchase_unit_cost;
       await db.run(`
@@ -205,12 +215,13 @@ router.put('/outward/:id', async (req, res) => {
           purchase_item_name=COALESCE($1,purchase_item_name), purchase_category=COALESCE($2,purchase_category),
           purchase_unit=COALESCE($3,purchase_unit), purchase_quantity=$4, purchase_unit_cost=$5,
           amount=$6, payee_or_payer=COALESCE($7,payee_or_payer), description=COALESCE($8,description),
-          transaction_date=$9, notes=COALESCE($10,notes), updated_at=NOW()
-        WHERE id=$11
+          transaction_date=$9, notes=COALESCE($10,notes), vendor_id=COALESCE($11,vendor_id),
+          expected_delivery_date=COALESCE($12,expected_delivery_date), updated_at=NOW()
+        WHERE id=$13
       `, [purchase_item_name || null, purchase_category !== undefined ? purchase_category : null,
           purchase_unit !== undefined ? purchase_unit : null, qty, unitCost, (Number(qty) || 0) * (Number(unitCost) || 0),
           payee_or_payer !== undefined ? payee_or_payer : null, description !== undefined ? description : null,
-          transaction_date || null, notes !== undefined ? notes : null, req.params.id]);
+          transaction_date || null, notes !== undefined ? notes : null, vendor_id || null, expected_delivery_date || null, req.params.id]);
     } else {
       const { category, payee_or_payer, amount, description, transaction_date, payment_mode, notes } = req.body;
       await db.run(`
@@ -246,6 +257,34 @@ router.post('/outward/:id/mark-paid', async (req, res) => {
       WHERE id=$3
     `, [payment_mode || null, transaction_date || null, req.params.id]);
     logActivity(req.user, { action: 'update', entityType: 'finance_outward', entityId: Number(req.params.id), label: 'marked paid' });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// Admin-side update of a Purchase Request's order/delivery progress — the
+// same thing a vendor can do from their own portal (see
+// vendorPortal.js PUT /orders/purchase/:id/delivery), just also reachable by
+// an admin who's tracking it on the vendor's behalf. Independent of the
+// payment-approval status (status column) above.
+router.put('/outward/:id/delivery', async (req, res) => {
+  const { delivery_status, expected_delivery_date, actual_delivery_date } = req.body;
+  if (delivery_status && !['ordered', 'in_transit', 'delivered', 'delayed', 'cancelled'].includes(delivery_status)) {
+    return res.status(400).json({ error: 'Invalid delivery_status' });
+  }
+  try {
+    const existing = await db.get(`SELECT id FROM finance_transactions WHERE id=$1 AND subtype='purchase'`, [req.params.id]);
+    if (!existing) return res.status(404).json({ error: 'Purchase request not found' });
+    await db.run(`
+      UPDATE finance_transactions SET
+        delivery_status=COALESCE($1,delivery_status),
+        expected_delivery_date=COALESCE($2,expected_delivery_date),
+        actual_delivery_date=CASE WHEN $1='delivered' AND actual_delivery_date IS NULL THEN NOW()::date ELSE COALESCE($3,actual_delivery_date) END,
+        updated_at=NOW()
+      WHERE id=$4
+    `, [delivery_status || null, expected_delivery_date || null, actual_delivery_date || null, req.params.id]);
+    logActivity(req.user, { action: 'update', entityType: 'finance_outward', entityId: Number(req.params.id), label: `delivery status: ${delivery_status || '—'}` });
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });

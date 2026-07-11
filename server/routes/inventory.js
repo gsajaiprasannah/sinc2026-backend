@@ -64,15 +64,23 @@ router.get('/', async (req, res) => {
 });
 
 router.post('/', async (req, res) => {
-  const { name, category, unit, quantity_procured, reorder_threshold, vendor_name, unit_cost, procurement_status, responsible_committee_id, notes } = req.body;
+  const { name, category, unit, quantity_procured, reorder_threshold, vendor_name, unit_cost, procurement_status, responsible_committee_id, notes, vendor_id, expected_delivery_date } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'name is required' });
   try {
+    // If a vendor master is picked, auto-fill the free-text vendor_name from
+    // it unless one was typed explicitly — same back-compat approach as
+    // finance.js's purchase requests.
+    let vendorName = vendor_name || '';
+    if (vendor_id && !vendorName.trim()) {
+      const v = await db.get('SELECT name FROM vendors WHERE id=$1', [vendor_id]);
+      if (v) vendorName = v.name;
+    }
     const result = await db.run(`
-      INSERT INTO inventory_items (name, category, unit, quantity_procured, reorder_threshold, vendor_name, unit_cost, procurement_status, responsible_committee_id, notes)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id
+      INSERT INTO inventory_items (name, category, unit, quantity_procured, reorder_threshold, vendor_name, unit_cost, procurement_status, responsible_committee_id, notes, vendor_id, expected_delivery_date)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id
     `, [name.trim(), category || '', unit || 'pcs', Number(quantity_procured) || 0, reorder_threshold !== undefined && reorder_threshold !== '' ? Number(reorder_threshold) : null,
-        vendor_name || '', unit_cost !== undefined && unit_cost !== '' ? Number(unit_cost) : null, procurement_status || 'planned',
-        responsible_committee_id || null, notes || '']);
+        vendorName, unit_cost !== undefined && unit_cost !== '' ? Number(unit_cost) : null, procurement_status || 'planned',
+        responsible_committee_id || null, notes || '', vendor_id || null, expected_delivery_date || null]);
     logActivity(req.user, { action: 'create', entityType: 'inventory_item', entityId: result.id, label: name.trim() });
     res.json({ id: result.id });
   } catch (e) {
@@ -101,14 +109,42 @@ router.put('/:id', async (req, res) => {
       ? (body.unit_cost === '' || body.unit_cost === null ? null : Number(body.unit_cost)) : existing.unit_cost;
     const responsible_committee_id = body.responsible_committee_id !== undefined
       ? (body.responsible_committee_id || null) : existing.responsible_committee_id;
+    const vendor_id = body.vendor_id !== undefined ? (body.vendor_id || null) : existing.vendor_id;
+    const expected_delivery_date = body.expected_delivery_date !== undefined ? (body.expected_delivery_date || null) : existing.expected_delivery_date;
+    const actual_delivery_date = body.actual_delivery_date !== undefined ? (body.actual_delivery_date || null) : existing.actual_delivery_date;
     if (!name) return res.status(400).json({ error: 'name cannot be empty' });
     await db.run(`
       UPDATE inventory_items SET
         name=$1, category=$2, unit=$3, quantity_procured=$4, reorder_threshold=$5, vendor_name=$6,
-        unit_cost=$7, procurement_status=$8, responsible_committee_id=$9, notes=$10, updated_at=NOW()
-      WHERE id=$11
-    `, [name, category, unit, quantity_procured, reorder_threshold, vendor_name, unit_cost, procurement_status, responsible_committee_id, notes, req.params.id]);
+        unit_cost=$7, procurement_status=$8, responsible_committee_id=$9, notes=$10, vendor_id=$11,
+        expected_delivery_date=$12, actual_delivery_date=$13, updated_at=NOW()
+      WHERE id=$14
+    `, [name, category, unit, quantity_procured, reorder_threshold, vendor_name, unit_cost, procurement_status, responsible_committee_id, notes,
+        vendor_id, expected_delivery_date, actual_delivery_date, req.params.id]);
     logActivity(req.user, { action: 'update', entityType: 'inventory_item', entityId: Number(req.params.id), label: name });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// Admin-side quick update of just an item's delivery progress — same effect
+// as the vendor's own PUT /vendor/orders/inventory/:id/delivery, just also
+// reachable by an admin tracking it on the vendor's behalf.
+router.put('/:id/delivery', async (req, res) => {
+  const { procurement_status, expected_delivery_date, actual_delivery_date } = req.body;
+  try {
+    const existing = await db.get('SELECT id FROM inventory_items WHERE id=$1', [req.params.id]);
+    if (!existing) return res.status(404).json({ error: 'Inventory item not found.' });
+    await db.run(`
+      UPDATE inventory_items SET
+        procurement_status=COALESCE($1,procurement_status),
+        expected_delivery_date=COALESCE($2,expected_delivery_date),
+        actual_delivery_date=CASE WHEN $1='received' AND actual_delivery_date IS NULL THEN NOW()::date ELSE COALESCE($3,actual_delivery_date) END,
+        updated_at=NOW()
+      WHERE id=$4
+    `, [procurement_status || null, expected_delivery_date || null, actual_delivery_date || null, req.params.id]);
+    logActivity(req.user, { action: 'update', entityType: 'inventory_item', entityId: Number(req.params.id), label: `delivery: ${procurement_status || '—'}` });
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
