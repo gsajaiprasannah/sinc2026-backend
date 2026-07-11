@@ -35,7 +35,7 @@ router.get('/', async (req, res) => {
 router.get('/products/all', async (req, res) => {
   try {
     const rows = await db.all(`
-      SELECT vp.id, vp.vendor_id, v.name AS vendor_name, vp.name, vp.category, vp.unit, vp.unit_price, vp.processing_time_days, vp.status
+      SELECT vp.id, vp.vendor_id, v.name AS vendor_name, vp.name, vp.category, vp.unit, vp.unit_price, vp.processing_time_days, vp.description, vp.status
       FROM vendor_products vp
       JOIN vendors v ON v.id = vp.vendor_id
       ORDER BY v.name, vp.name
