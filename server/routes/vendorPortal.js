@@ -65,13 +65,15 @@ router.get('/products', requireVendorRole, async (req, res) => {
 });
 
 router.post('/products', requireVendorRole, async (req, res) => {
-  const { name, category, unit, unit_price, description, status } = req.body;
+  const { name, category, unit, unit_price, processing_time_days, description, status } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'Product name is required' });
   try {
     const result = await db.run(`
-      INSERT INTO vendor_products (vendor_id, name, category, unit, unit_price, description, status)
-      VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id
-    `, [req.vendorId, name.trim(), category || '', unit || 'pcs', unit_price || null, description || '', status || 'active']);
+      INSERT INTO vendor_products (vendor_id, name, category, unit, unit_price, processing_time_days, description, status)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id
+    `, [req.vendorId, name.trim(), category || '', unit || 'pcs', unit_price || null,
+        processing_time_days !== undefined && processing_time_days !== '' ? Number(processing_time_days) : null,
+        description || '', status || 'active']);
     res.json({ id: result.id });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -81,15 +83,16 @@ router.post('/products', requireVendorRole, async (req, res) => {
 router.put('/products/:id', requireVendorRole, async (req, res) => {
   const owned = await db.get('SELECT id FROM vendor_products WHERE id=$1 AND vendor_id=$2', [req.params.id, req.vendorId]);
   if (!owned) return res.status(404).json({ error: 'Product not found' });
-  const { name, category, unit, unit_price, description, status } = req.body;
+  const { name, category, unit, unit_price, processing_time_days, description, status } = req.body;
   try {
     await db.run(`
       UPDATE vendor_products SET
         name=COALESCE($1,name), category=COALESCE($2,category), unit=COALESCE($3,unit),
-        unit_price=$4, description=COALESCE($5,description), status=COALESCE($6,status), updated_at=NOW()
-      WHERE id=$7
+        unit_price=$4, processing_time_days=$5, description=COALESCE($6,description), status=COALESCE($7,status), updated_at=NOW()
+      WHERE id=$8
     `, [name || null, category !== undefined ? category : null, unit !== undefined ? unit : null,
         unit_price !== undefined && unit_price !== '' ? Number(unit_price) : null,
+        processing_time_days !== undefined && processing_time_days !== '' ? Number(processing_time_days) : null,
         description !== undefined ? description : null, status || null, req.params.id]);
     res.json({ ok: true });
   } catch (e) {

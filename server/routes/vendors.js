@@ -35,7 +35,7 @@ router.get('/', async (req, res) => {
 router.get('/products/all', async (req, res) => {
   try {
     const rows = await db.all(`
-      SELECT vp.id, vp.vendor_id, v.name AS vendor_name, vp.name, vp.category, vp.unit, vp.unit_price, vp.status
+      SELECT vp.id, vp.vendor_id, v.name AS vendor_name, vp.name, vp.category, vp.unit, vp.unit_price, vp.processing_time_days, vp.status
       FROM vendor_products vp
       JOIN vendors v ON v.id = vp.vendor_id
       ORDER BY v.name, vp.name
@@ -116,15 +116,17 @@ router.delete('/:id', async (req, res) => {
 
 // --- Vendor's product catalog (admin can also manage it on the vendor's behalf) ---
 router.post('/:id/products', async (req, res) => {
-  const { name, category, unit, unit_price, description, status } = req.body;
+  const { name, category, unit, unit_price, processing_time_days, description, status } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'Product name is required' });
   try {
     const vendor = await db.get('SELECT id FROM vendors WHERE id=$1', [req.params.id]);
     if (!vendor) return res.status(404).json({ error: 'Vendor not found' });
     const result = await db.run(`
-      INSERT INTO vendor_products (vendor_id, name, category, unit, unit_price, description, status)
-      VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id
-    `, [req.params.id, name.trim(), category || '', unit || 'pcs', unit_price || null, description || '', status || 'active']);
+      INSERT INTO vendor_products (vendor_id, name, category, unit, unit_price, processing_time_days, description, status)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id
+    `, [req.params.id, name.trim(), category || '', unit || 'pcs', unit_price || null,
+        processing_time_days !== undefined && processing_time_days !== '' ? Number(processing_time_days) : null,
+        description || '', status || 'active']);
     logActivity(req.user, { action: 'create', entityType: 'vendor_product', entityId: result.id, label: name.trim() });
     res.json({ id: result.id });
   } catch (e) {
@@ -133,15 +135,16 @@ router.post('/:id/products', async (req, res) => {
 });
 
 router.put('/products/:productId', async (req, res) => {
-  const { name, category, unit, unit_price, description, status } = req.body;
+  const { name, category, unit, unit_price, processing_time_days, description, status } = req.body;
   try {
     await db.run(`
       UPDATE vendor_products SET
         name=COALESCE($1,name), category=COALESCE($2,category), unit=COALESCE($3,unit),
-        unit_price=$4, description=COALESCE($5,description), status=COALESCE($6,status), updated_at=NOW()
-      WHERE id=$7
+        unit_price=$4, processing_time_days=$5, description=COALESCE($6,description), status=COALESCE($7,status), updated_at=NOW()
+      WHERE id=$8
     `, [name || null, category !== undefined ? category : null, unit !== undefined ? unit : null,
         unit_price !== undefined && unit_price !== '' ? Number(unit_price) : null,
+        processing_time_days !== undefined && processing_time_days !== '' ? Number(processing_time_days) : null,
         description !== undefined ? description : null, status || null, req.params.productId]);
     res.json({ ok: true });
   } catch (e) {
