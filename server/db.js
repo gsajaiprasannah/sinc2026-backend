@@ -1155,6 +1155,10 @@ async function initSchema() {
   // A vendor's own catalog of what they supply — maintained by the vendor
   // themselves from their portal login (or by an admin on their behalf).
   // photo_url lets a vendor snap/upload a picture of the product.
+  // processing_time_days is how long the vendor typically needs to fulfil an
+  // order for this item once placed — shown alongside price/unit so the
+  // congress team can plan expected delivery dates when raising a Purchase
+  // Request for it.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS vendor_products (
       id SERIAL PRIMARY KEY,
@@ -1163,6 +1167,7 @@ async function initSchema() {
       category TEXT DEFAULT '',
       unit TEXT DEFAULT 'pcs',
       unit_price NUMERIC,
+      processing_time_days INTEGER,
       description TEXT,
       photo_url TEXT,
       status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','inactive')),
@@ -1170,6 +1175,7 @@ async function initSchema() {
       updated_at TIMESTAMP DEFAULT NOW()
     );
   `);
+  await pool.query(`ALTER TABLE vendor_products ADD COLUMN IF NOT EXISTS processing_time_days INTEGER;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS vendor_products_vendor_idx ON vendor_products(vendor_id);`);
 
   // Link a Purchase Request to the vendor it was ordered from, and track its
