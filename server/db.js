@@ -1127,6 +1127,84 @@ async function initSchema() {
   // Read-only consolidated view of every inward rupee across the congress:
   // manual Finance entries UNIONed with payments already recorded by other
   // modules (so this module doesn't need its own duplicate copy of that
+  // --- Vendor Management: the master list of outside suppliers (kit/goodies
+  // printers, caterers, decor, stationery, etc.) that Purchase Requests
+  // (finance_transactions subtype='purchase') and Inventory Items both
+  // procure from. A vendor can also get their own portal login (see
+  // users.vendor_id + server/routes/vendorPortal.js below) to maintain their
+  // own product catalog (vendor_products, with a photo) and update the
+  // delivery status of their own orders — without seeing anything else in
+  // the system.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS vendors (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      category TEXT DEFAULT '',
+      contact_person TEXT,
+      phone TEXT,
+      email TEXT,
+      address TEXT,
+      gst_number TEXT,
+      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','inactive')),
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+
+  // A vendor's own catalog of what they supply — maintained by the vendor
+  // themselves from their portal login (or by an admin on their behalf).
+  // photo_url lets a vendor snap/upload a picture of the product.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS vendor_products (
+      id SERIAL PRIMARY KEY,
+      vendor_id INTEGER NOT NULL REFERENCES vendors(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      category TEXT DEFAULT '',
+      unit TEXT DEFAULT 'pcs',
+      unit_price NUMERIC,
+      description TEXT,
+      photo_url TEXT,
+      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','inactive')),
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS vendor_products_vendor_idx ON vendor_products(vendor_id);`);
+
+  // Link a Purchase Request to the vendor it was ordered from, and track its
+  // order/delivery schedule separately from the payment-approval status
+  // already on this table (status='pending_approval'/'approved'/'paid' is
+  // about MONEY moving; delivery_status here is about the GOODS arriving —
+  // the two lifecycles run independently, e.g. a purchase can be delivered
+  // before it's been paid, or paid while still in transit).
+  await pool.query(`ALTER TABLE finance_transactions ADD COLUMN IF NOT EXISTS vendor_id INTEGER REFERENCES vendors(id) ON DELETE SET NULL;`);
+  await pool.query(`ALTER TABLE finance_transactions ADD COLUMN IF NOT EXISTS expected_delivery_date DATE;`);
+  await pool.query(`ALTER TABLE finance_transactions ADD COLUMN IF NOT EXISTS actual_delivery_date DATE;`);
+  await pool.query(`ALTER TABLE finance_transactions ADD COLUMN IF NOT EXISTS delivery_status TEXT NOT NULL DEFAULT 'ordered' CHECK (delivery_status IN ('ordered','in_transit','delivered','delayed','cancelled'));`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS finance_transactions_vendor_idx ON finance_transactions(vendor_id);`);
+
+  // Same linkage + delivery tracking on Inventory Items (the other place
+  // goods get procured from a vendor — see server/routes/inventory.js).
+  // procurement_status already covers the item's own planned->ordered->
+  // received->distributing->completed lifecycle; 'delayed' is added here so
+  // it lines up with the purchase-request delivery_status options above.
+  await pool.query(`ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS vendor_id INTEGER REFERENCES vendors(id) ON DELETE SET NULL;`);
+  await pool.query(`ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS expected_delivery_date DATE;`);
+  await pool.query(`ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS actual_delivery_date DATE;`);
+  await pool.query(`ALTER TABLE inventory_items DROP CONSTRAINT IF EXISTS inventory_items_procurement_status_check;`);
+  await pool.query(`ALTER TABLE inventory_items ADD CONSTRAINT inventory_items_procurement_status_check CHECK (procurement_status IN ('planned','ordered','received','distributing','completed','delayed'));`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS inventory_items_vendor_idx ON inventory_items(vendor_id);`);
+
+  // --- Vendor portal login: same pattern as host_member_id/driver_id/
+  // partner_id/volunteer_id in users (see server/routes/auth.js's
+  // LINKED_ROLE_FIELDS + ALL_ROLES) — 'vendor' just adds one more linked
+  // role, scoped to a single vendors row via requireVendorRole in
+  // vendorPortal.js (same self-scoping pattern as transporterPortal.js).
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS vendor_id INTEGER REFERENCES vendors(id) ON DELETE SET NULL;`);
+  await pool.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;`);
+  await pool.query(`ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('super_admin','admin','host_member','media','transporter','driver','volunteer','vendor'));`);
+
   // money). Recreated on every boot (CREATE OR REPLACE) so adding a new
   // source later is just one more UNION branch.
   await pool.query(`

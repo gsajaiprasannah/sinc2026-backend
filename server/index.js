@@ -135,6 +135,14 @@ app.use('/api/rooms', requireAdminRole, require('./routes/rooms'));
 // did + when), tagged to a responsible committee per item.
 app.use('/api/inventory', requireAdminRole, require('./routes/inventory'));
 
+// --- Vendor Management: the outside suppliers Purchase Requests (Finance)
+// and Inventory Items both procure from — what each vendor supplies, and the
+// order/delivery status of everything ordered from them. /api/vendor-portal
+// is the vendor's own self-scoped login (see server/routes/vendorPortal.js),
+// same self-service pattern as /api/driver-portal / /api/transporter-portal.
+app.use('/api/vendors', requireAdminRole, require('./routes/vendors'));
+app.use('/api/vendor-portal', require('./routes/vendorPortal'));
+
 // --- Stalls: exhibition stall enquiry -> billing -> allocation. Halls and
 // stalls are admin-managed masters (the venue's final hall/stall count
 // isn't fixed yet); stall_bookings.js carries the enquiry through billed
