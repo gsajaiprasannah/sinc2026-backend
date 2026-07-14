@@ -614,7 +614,7 @@ async function initSchema() {
   // need it relaxed, since Postgres won't alter CHECK constraints in place —
   // drop and recreate.
   await pool.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;`);
-  await pool.query(`ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('super_admin','admin','host_member','media','transporter','driver','volunteer'));`);
+  await pool.query(`ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('super_admin','admin','host_member','media','transporter','driver','volunteer','vendor'));`);
 
   // Older databases created before 'congress_only' was added to reg_type need
   // the CHECK constraint relaxed (Postgres won't alter CHECK constraints in
