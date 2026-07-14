@@ -42,6 +42,20 @@ router.get('/next-code', async (req, res) => {
   }
 });
 
+// Minimal Host Member lookup for the "Guest Relation member" dropdown — the
+// Sponsors module doesn't otherwise grant access to the internal Host
+// Members admin data, so this exposes just id+name+company (nothing
+// sensitive like payment/phone). Registered before /:id so this literal
+// path is never swallowed as an id.
+router.get('/host-members-lite', async (req, res) => {
+  try {
+    const rows = await db.all(`SELECT id, name, company FROM host_members ORDER BY name`);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.get('/:id', async (req, res) => {
   try {
     const row = await db.get(`

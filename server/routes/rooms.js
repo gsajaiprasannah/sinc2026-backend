@@ -22,6 +22,33 @@ router.get('/', async (req, res) => {
   }
 });
 
+// Minimal Delegate/Host Member lookups for the room-assignment form's
+// "Occupant type" toggle — a committee only granted Accommodation & Rooms
+// (not the separate Delegate Registrations / internal Host Members admin
+// data) still needs real names to assign a room to, instead of a raw
+// numeric id. Registered before /:id so the literal paths are never
+// swallowed as an id.
+router.get('/participants-lite', async (req, res) => {
+  try {
+    const rows = await db.all(`
+      SELECT p.id, p.name, p.participant_code, c.name AS club_name
+      FROM participants p LEFT JOIN clubs c ON c.id = p.club_id
+      ORDER BY p.name
+    `);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+router.get('/host-members-lite', async (req, res) => {
+  try {
+    const rows = await db.all(`SELECT id, name, company FROM host_members ORDER BY name`);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.post('/', async (req, res) => {
   const { hotel_id, room_number, room_type, participant_id, host_member_id, check_in, check_out, notes } = req.body;
   if (!hotel_id || !room_number || !room_number.trim()) {

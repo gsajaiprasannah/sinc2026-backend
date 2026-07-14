@@ -114,6 +114,20 @@ router.get('/', async (req, res) => {
   }
 });
 
+// Minimal Host Member lookup for the "SPOC" dropdown — the Delegate
+// Registrations module doesn't otherwise grant access to the internal Host
+// Members admin data, so this exposes just id+name+company (nothing
+// sensitive like payment/phone). Registered before /:id so this literal
+// path is never swallowed as an id.
+router.get('/host-members-lite', async (req, res) => {
+  try {
+    const rows = await db.all(`SELECT id, name, company FROM host_members ORDER BY name`);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.get('/:id', async (req, res) => {
   try {
     const row = await db.get(`
@@ -197,6 +211,31 @@ router.put('/:id', async (req, res) => {
     const values = cols.map((c) => body[c]);
     await db.run(`UPDATE participants SET ${setClause} WHERE id=$${cols.length + 1}`, [...values, req.params.id]);
     logActivity(req.user, { action: 'update', entityType: 'participant', entityId: Number(req.params.id), label: body.name });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// Convenience endpoint mirroring /api/assignments/spoc/:participantId — the
+// Delegate Registrations module's committee grant doesn't reach the
+// admin-only /api/assignments mount, so the SPOC link (a delegate_assignments
+// row, not a participants column) is set from here instead. Keeps at most
+// one SPOC assignment per delegate, same transaction logic as assignments.js.
+router.put('/:id/spoc', async (req, res) => {
+  const { host_member_id } = req.body;
+  const participantId = req.params.id;
+  try {
+    await db.transaction(async (tx) => {
+      await tx.run(`DELETE FROM delegate_assignments WHERE participant_id=$1 AND role='SPOC'`, [participantId]);
+      if (host_member_id) {
+        await tx.run(`
+          INSERT INTO delegate_assignments (host_member_id, participant_id, role, status)
+          VALUES ($1,$2,'SPOC','not_started')
+          ON CONFLICT (host_member_id, participant_id) DO UPDATE SET role='SPOC'
+        `, [host_member_id, participantId]);
+      }
+    });
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });

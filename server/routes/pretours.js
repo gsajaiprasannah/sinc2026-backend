@@ -1,5 +1,6 @@
 const express = require('express');
 const db = require('../db');
+const push = require('../pushHelper');
 const { logActivity } = require('../lib/activityLogger');
 
 const router = express.Router();
@@ -13,6 +14,61 @@ router.get('/', async (req, res) => {
       FROM pre_tours pt
       ORDER BY pt.start_date NULLS LAST, pt.id
     `);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Minimal Vehicle/Driver lookups for this tour's "Transport for this tour"
+// form — same reasoning as transport.js's own vehicles-lite/drivers-lite:
+// a committee only granted the Pre Tours module (not the separate Vehicles
+// or Transport Planning modules) still needs to pick from the real fleet
+// instead of typing a raw numeric id. Registered before /:id so these
+// literal paths are never swallowed as an id.
+router.get('/vehicles-lite', async (req, res) => {
+  try {
+    const rows = await db.all(`
+      SELECT id, vehicle_code, vehicle_type, model, seating_capacity
+      FROM vehicles ORDER BY vehicle_code
+    `);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+router.get('/drivers-lite', async (req, res) => {
+  try {
+    const rows = await db.all(`
+      SELECT d.id, d.name, d.vehicle_id, v.vehicle_code
+      FROM drivers d
+      LEFT JOIN vehicles v ON v.id = d.vehicle_id
+      ORDER BY d.name
+    `);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Same idea for the "Delegates / host members signed up" sub-panel's
+// occupant-type toggle — mirrors rooms.js's participants-lite/
+// host-members-lite exactly.
+router.get('/participants-lite', async (req, res) => {
+  try {
+    const rows = await db.all(`
+      SELECT p.id, p.name, p.participant_code, c.name AS club_name
+      FROM participants p LEFT JOIN clubs c ON c.id = p.club_id
+      ORDER BY p.name
+    `);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+router.get('/host-members-lite', async (req, res) => {
+  try {
+    const rows = await db.all(`SELECT id, name, company FROM host_members ORDER BY name`);
     res.json(rows);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -176,6 +232,57 @@ router.put('/participants/:rowId', async (req, res) => {
 router.delete('/participants/:rowId', async (req, res) => {
   await db.run('DELETE FROM pre_tour_participants WHERE id=$1', [req.params.rowId]);
   res.json({ ok: true });
+});
+
+// --- Tour-scoped transport (shares the transport_trips table with the ---
+// --- Transport Planning module — filtered/created by pre_tour_id here so ---
+// --- a committee only granted Pre Tours can plan this tour's transport ---
+// --- without also needing the Transport Planning module grant). Mirrors ---
+// --- admin.js's refreshTourTrips/tourTripForm, which POST to the shared ---
+// --- /transport route with pre_tour_id set — this is the same insert, ---
+// --- just reachable through the pretours mount instead. ---
+router.get('/:id/trips', async (req, res) => {
+  try {
+    const rows = await db.all(`
+      SELECT t.*, v.vehicle_code, v.vehicle_type, v.model AS vehicle_model, v.seating_capacity,
+        d.name AS driver_name, d.phone AS driver_phone,
+        (SELECT COUNT(*) FROM transport_trip_passengers tp WHERE tp.trip_id = t.id) AS passenger_count
+      FROM transport_trips t
+      LEFT JOIN vehicles v ON v.id = t.vehicle_id
+      LEFT JOIN drivers d ON d.id = t.driver_id
+      WHERE t.pre_tour_id = $1
+      ORDER BY t.trip_date NULLS LAST, t.depart_time, t.id DESC
+    `, [req.params.id]);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post('/:id/trips', async (req, res) => {
+  const { trip_date, depart_time, from_location, to_location, purpose, vehicle_id, driver_id, notes } = req.body;
+  if (!from_location || !to_location) return res.status(400).json({ error: 'from_location and to_location are required' });
+  try {
+    const result = await db.run(`
+      INSERT INTO transport_trips (pre_tour_id, trip_date, depart_time, from_location, to_location, purpose, vehicle_id, driver_id, status, notes)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'planned',$9) RETURNING id
+    `, [req.params.id, trip_date || null, depart_time || '', from_location, to_location,
+        purpose || '', vehicle_id || null, driver_id || null, notes || '']);
+    if (driver_id) {
+      const u = await db.get('SELECT id FROM users WHERE driver_id=$1', [driver_id]);
+      if (u) {
+        push.sendToUser(u.id, {
+          title: 'New trip assigned',
+          body: `${from_location} → ${to_location}${trip_date ? ' on ' + trip_date : ''}${depart_time ? ' at ' + depart_time : ''}`,
+          url: 'login.html'
+        }).catch((e) => console.error('notifyDriverAssigned failed', e.message));
+      }
+    }
+    logActivity(req.user, { action: 'create', entityType: 'transport_trip', entityId: result.id, label: `${from_location} → ${to_location}`, details: 'Pre Tour trip' });
+    res.json({ id: result.id });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 
 module.exports = router;

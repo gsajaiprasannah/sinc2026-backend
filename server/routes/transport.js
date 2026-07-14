@@ -158,6 +158,33 @@ router.get('/drivers-lite', async (req, res) => {
   }
 });
 
+// Minimal Delegate/Host Member lookups for the passenger-manifest form's
+// "Passenger type" toggle — same reasoning as vehicles-lite/drivers-lite
+// above: a committee only granted Transport Planning still needs real names
+// to add a passenger, instead of a raw numeric id. Mirrors rooms.js's
+// participants-lite/host-members-lite exactly. Registered before /:id so
+// these literal paths are never swallowed as an id.
+router.get('/participants-lite', async (req, res) => {
+  try {
+    const rows = await db.all(`
+      SELECT p.id, p.name, p.participant_code, c.name AS club_name
+      FROM participants p LEFT JOIN clubs c ON c.id = p.club_id
+      ORDER BY p.name
+    `);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+router.get('/host-members-lite', async (req, res) => {
+  try {
+    const rows = await db.all(`SELECT id, name, company FROM host_members ORDER BY name`);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Confirms a suggested group (or any hand-picked set of delegates) into a
 // real trip in one shot: creates the transport_trips row AND every
 // transport_trip_passengers row together, instead of the committee creating

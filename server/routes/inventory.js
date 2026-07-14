@@ -63,6 +63,81 @@ router.get('/', async (req, res) => {
   }
 });
 
+// Minimal Committee/Vendor lookups for the item form's "Responsible
+// committee" and "Vendor (from master)" dropdowns — the Goodies & Inventory
+// module doesn't otherwise grant access to the Committees or Vendor
+// Management admin data, so these expose just id+name (nothing sensitive).
+// Registered before any /:id-shaped routes so the literal paths are never
+// swallowed as an id.
+router.get('/committees-lite', async (req, res) => {
+  try {
+    const rows = await db.all(`SELECT id, name FROM committees ORDER BY name`);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+router.get('/vendors-lite', async (req, res) => {
+  try {
+    const rows = await db.all(`SELECT id, name, category FROM vendors ORDER BY name`);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Minimal per-recipient-type name lookups for the distribution modal's
+// "Add one recipient" / bulk-assign forms — same reasoning as committees-lite/
+// vendors-lite above: a committee only granted Goodies & Inventory (not the
+// separate Sponsors/Guest Speakers/Guest Visitors/Delegate Registrations
+// admin data) still needs real names to record a delivery against, instead
+// of a raw numeric id. host-members-lite doubles as both a recipient list
+// (recipient_type='host_member') and the assigned/delivered-by picker.
+router.get('/sponsors-lite', async (req, res) => {
+  try {
+    const rows = await db.all(`SELECT id, name FROM sponsors ORDER BY name`);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+router.get('/speakers-lite', async (req, res) => {
+  try {
+    const rows = await db.all(`SELECT id, name FROM speakers ORDER BY name`);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+router.get('/guestvisitors-lite', async (req, res) => {
+  try {
+    const rows = await db.all(`SELECT id, name FROM guest_visitors ORDER BY name`);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+router.get('/participants-lite', async (req, res) => {
+  try {
+    const rows = await db.all(`
+      SELECT p.id, p.name, p.participant_code, c.name AS club_name
+      FROM participants p LEFT JOIN clubs c ON c.id = p.club_id
+      ORDER BY p.name
+    `);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+router.get('/host-members-lite', async (req, res) => {
+  try {
+    const rows = await db.all(`SELECT id, name, company FROM host_members ORDER BY name`);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.post('/', async (req, res) => {
   const { name, category, unit, quantity_procured, reorder_threshold, vendor_name, unit_cost, procurement_status, responsible_committee_id, notes, vendor_id, expected_delivery_date } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'name is required' });

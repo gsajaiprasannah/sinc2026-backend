@@ -43,6 +43,25 @@ router.get('/', async (req, res) => {
   }
 });
 
+// Minimal Vehicle lookup for the driver form's "Assigned vehicle" dropdown —
+// a committee only granted Partners & Drivers (not the separate Vehicles
+// module) still needs to pick from the real fleet instead of typing a raw
+// numeric id, so this lives under this already-transport_partners-gated
+// mount rather than requiring the committee to also be granted the Vehicles
+// module. Mirrors transport.js's /vehicles-lite pattern. Registered before
+// any :id-shaped routes so the literal path is never swallowed as an id.
+router.get('/vehicles-lite', async (req, res) => {
+  try {
+    const rows = await db.all(`
+      SELECT id, vehicle_code, vehicle_type, model, seating_capacity
+      FROM vehicles ORDER BY vehicle_code
+    `);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.post('/', async (req, res) => {
   const { name, phone, vehicle_number, vehicle_type, vehicle_id, partner_id, notes, force } = req.body;
   if (!name) return res.status(400).json({ error: 'name is required' });

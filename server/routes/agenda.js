@@ -27,6 +27,23 @@ router.get('/', async (req, res) => {
   }
 });
 
+// Minimal Committee lookup for the "Organizing committee" dropdown — a
+// committee only granted the Itinerary module (not the separate internal
+// Committees admin data) still needs real committee names to record who's
+// organizing an agenda event, instead of a raw numeric id. This router has
+// no public mount anywhere (only /api/agenda, admin-only, and
+// /api/portal-modules/agenda, itinerary-module-gated — see server/index.js),
+// so this is never reachable without a valid login. Registered before /:id
+// so this literal path is never swallowed as an id.
+router.get('/committees-lite', async (req, res) => {
+  try {
+    const rows = await db.all(`SELECT id, name FROM committees ORDER BY name`);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.get('/:id', async (req, res) => {
   try {
     const row = await db.get('SELECT * FROM agenda_events WHERE id=$1', [req.params.id]);

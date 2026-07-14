@@ -49,6 +49,20 @@ router.get('/next-code', async (req, res) => {
   }
 });
 
+// Minimal Partner lookup for the vehicle form's "Transport partner" dropdown
+// — a committee only granted Vehicles (not the separate Partners & Drivers
+// module) still needs to pick from the real partner list instead of typing a
+// raw numeric id. Mirrors transport.js's /vehicles-lite pattern. Registered
+// before /:id so the literal path is never swallowed as an id.
+router.get('/partners-lite', async (req, res) => {
+  try {
+    const rows = await db.all(`SELECT id, name, category FROM partners ORDER BY name`);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.post('/', async (req, res) => {
   let { vehicle_code, vehicle_type, model, seating_capacity, registration_number, partner_id, notes } = req.body;
   vehicle_type = (vehicle_type || '').toLowerCase();
