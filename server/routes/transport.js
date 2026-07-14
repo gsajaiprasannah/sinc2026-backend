@@ -127,6 +127,37 @@ router.get('/departures-queue', async (req, res) => {
   }
 });
 
+// Minimal Vehicle/Driver lookups for the arrivals/departures-queue "Create
+// trip for this group" form. A committee only granted the Transport Planning
+// module (not the separate Vehicles or Partners & Drivers modules) still
+// needs to pick from the real fleet instead of typing a raw numeric id, so
+// these live under this already-transport_planning-gated mount rather than
+// requiring the committee to also be granted those other two modules.
+router.get('/vehicles-lite', async (req, res) => {
+  try {
+    const rows = await db.all(`
+      SELECT id, vehicle_code, vehicle_type, model, seating_capacity
+      FROM vehicles ORDER BY vehicle_code
+    `);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+router.get('/drivers-lite', async (req, res) => {
+  try {
+    const rows = await db.all(`
+      SELECT d.id, d.name, d.vehicle_id, v.vehicle_code
+      FROM drivers d
+      LEFT JOIN vehicles v ON v.id = d.vehicle_id
+      ORDER BY d.name
+    `);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Confirms a suggested group (or any hand-picked set of delegates) into a
 // real trip in one shot: creates the transport_trips row AND every
 // transport_trip_passengers row together, instead of the committee creating
