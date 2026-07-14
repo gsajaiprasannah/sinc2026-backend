@@ -111,6 +111,14 @@ app.use('/api/volunteer', require('./routes/volunteerSelf'));
   app.use('/api/portal-modules/media', requireModuleAccess('media'), require('./routes/media'));
   app.use('/api/portal-modules/happenings', requireModuleAccess('happenings'), require('./routes/happenings'));
   app.use('/api/portal-modules/itinerary', requireModuleAccess('itinerary'), require('./routes/itinerary'));
+  // Agenda Builder (per-itinerary-slot event flow) + Performer/Vendor Groups
+  // master — both admin-only routers (mounted below under /api/agenda and
+  // /api/performer-groups) reused here so a committee granted the Itinerary
+  // module can build out the detailed run-of-show and manage hired
+  // performer groups from their own portal, same "one checkbox, several
+  // routers" pattern as transport_partners/accommodation above.
+  app.use('/api/portal-modules/agenda', requireModuleAccess('itinerary'), require('./routes/agenda'));
+  app.use('/api/portal-modules/performer-groups', requireModuleAccess('itinerary'), require('./routes/performerGroups'));
   // Delegate registration data entry (for volunteers doing on-site/onboarding
   // data entry) — clubs (so a club dropdown/quick-add is available), the
   // registrations they belong to, and the delegates themselves. One module
@@ -206,7 +214,17 @@ app.use('/api', (req, res, next) => {
   next();
 });
 app.use('/api/media', require('./routes/media'));
-app.use('/api/itinerary', require('./routes/itinerary'));
+// GET stays public (the congress homepage renders the agenda from here). The
+// global mutating-methods gate above only requires ANY logged-in user, not a
+// specific role — so previously any host_member/driver/volunteer/etc, even
+// one with no Itinerary module grant, could bypass requireModuleAccess by
+// calling this direct mount instead of /api/portal-modules/itinerary. This
+// router is reused (properly gated) at that portal-modules mount, so only
+// this direct admin-facing mount needed the extra admin-role check below.
+app.use('/api/itinerary', (req, res, next) => {
+  if (req.method === 'GET') return next();
+  return requireAdminRole(req, res, next);
+}, require('./routes/itinerary'));
 app.use('/api/happenings', require('./routes/happenings'));
 // Narrow, public-safe views of sponsors/speakers (name + logo/photo + tier/
 // topic only — no phone/email/notes) for the homepage's Sponsors/Speakers
