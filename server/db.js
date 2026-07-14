@@ -803,6 +803,18 @@ async function initSchema() {
     );
   `);
 
+  // A Full Board day isn't just one "meal hotel" — there are 3 meals
+  // (breakfast/lunch/dinner) plus 2 hi-teas, and each of those 5 sittings can
+  // be hosted at a different hotel than where the group is sleeping (or than
+  // each other). These replace the old single meal_hotel_id concept for new
+  // hotel-plan entries; meal_hotel_id is left in place, unused, rather than
+  // dropped, so no data is destroyed.
+  await pool.query(`ALTER TABLE pre_tour_days ADD COLUMN IF NOT EXISTS breakfast_hotel_id INTEGER REFERENCES hotels(id) ON DELETE SET NULL;`);
+  await pool.query(`ALTER TABLE pre_tour_days ADD COLUMN IF NOT EXISTS hitea1_hotel_id INTEGER REFERENCES hotels(id) ON DELETE SET NULL;`);
+  await pool.query(`ALTER TABLE pre_tour_days ADD COLUMN IF NOT EXISTS lunch_hotel_id INTEGER REFERENCES hotels(id) ON DELETE SET NULL;`);
+  await pool.query(`ALTER TABLE pre_tour_days ADD COLUMN IF NOT EXISTS hitea2_hotel_id INTEGER REFERENCES hotels(id) ON DELETE SET NULL;`);
+  await pool.query(`ALTER TABLE pre_tour_days ADD COLUMN IF NOT EXISTS dinner_hotel_id INTEGER REFERENCES hotels(id) ON DELETE SET NULL;`);
+
   // One-time seed of the master checklist templates — only runs while the
   // table is still empty, so it never overwrites anything an admin has since
   // added, edited, or deleted from the Checklists & Milestones tab. These
