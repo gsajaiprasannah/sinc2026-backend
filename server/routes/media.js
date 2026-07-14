@@ -86,8 +86,8 @@ router.post('/upload', (req, res, next) => {
 }, async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'file is required' });
   try {
-    const type = req.body.type === 'poster' ? 'poster' : 'video';
-    const sub = type === 'poster' ? 'posters' : 'videos';
+    const type = req.body.type === 'poster' ? 'poster' : req.body.type === 'document' ? 'document' : 'video';
+    const sub = type === 'poster' ? 'posters' : type === 'document' ? 'documents' : 'videos';
     const storedPath = await saveFile(req.file, sub);
     const result = await db.run(
       'INSERT INTO media (type, filename, original_name, title, active, sort_order) VALUES ($1,$2,$3,$4,1,$5) RETURNING id',

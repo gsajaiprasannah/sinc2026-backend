@@ -75,6 +75,18 @@ router.get('/host-members-lite', async (req, res) => {
   }
 });
 
+// Same reasoning again, for the day-by-day Hotel Plan sub-panel's stay/meal
+// hotel selects — a committee with only the Pre Tours grant still needs to
+// pick from the real Hotels & Rooms register.
+router.get('/hotels-lite', async (req, res) => {
+  try {
+    const rows = await db.all(`SELECT id, name, address FROM hotels ORDER BY name`);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.get('/:id', async (req, res) => {
   try {
     const tour = await db.get('SELECT * FROM pre_tours WHERE id=$1', [req.params.id]);
@@ -172,6 +184,64 @@ router.put('/itinerary/:itemId', async (req, res) => {
 
 router.delete('/itinerary/:itemId', async (req, res) => {
   await db.run('DELETE FROM pre_tour_itinerary WHERE id=$1', [req.params.itemId]);
+  res.json({ ok: true });
+});
+
+// --- Day-by-day Hotel Plan (Full Board tours): the stay hotel and the meal
+// hotel for a given day, since a group's dinner venue doesn't always match
+// where they're sleeping that night. Deliberately its own table rather than
+// columns on pre_tour_itinerary — a tour can have an activity agenda without
+// a hotel plan yet, or vice versa, and this keeps both editable independently.
+router.get('/:id/hotel-days', async (req, res) => {
+  try {
+    const rows = await db.all(`
+      SELECT hd.*, sh.name AS stay_hotel_name, mh.name AS meal_hotel_name
+      FROM pre_tour_days hd
+      LEFT JOIN hotels sh ON sh.id = hd.stay_hotel_id
+      LEFT JOIN hotels mh ON mh.id = hd.meal_hotel_id
+      WHERE hd.pre_tour_id=$1
+      ORDER BY hd.sort_order, hd.day_date NULLS LAST, hd.id
+    `, [req.params.id]);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post('/:id/hotel-days', async (req, res) => {
+  const { day_date, day_label, stay_hotel_id, meal_hotel_id, notes, sort_order } = req.body;
+  if (!day_label) return res.status(400).json({ error: 'day_label is required' });
+  try {
+    const result = await db.run(`
+      INSERT INTO pre_tour_days (pre_tour_id, day_date, day_label, stay_hotel_id, meal_hotel_id, notes, sort_order)
+      VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id
+    `, [req.params.id, day_date || null, day_label, stay_hotel_id || null, meal_hotel_id || null,
+        notes || '', Number(sort_order) || 0]);
+    res.json({ id: result.id });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+router.put('/hotel-days/:dayId', async (req, res) => {
+  const { day_date, day_label, stay_hotel_id, meal_hotel_id, notes, sort_order } = req.body;
+  try {
+    await db.run(`
+      UPDATE pre_tour_days SET
+        day_date=COALESCE($1,day_date), day_label=COALESCE($2,day_label),
+        stay_hotel_id=$3, meal_hotel_id=$4,
+        notes=COALESCE($5,notes), sort_order=COALESCE($6,sort_order)
+      WHERE id=$7
+    `, [day_date || null, day_label || null, stay_hotel_id || null, meal_hotel_id || null,
+        notes !== undefined ? notes : null, sort_order !== undefined ? Number(sort_order) : null, req.params.dayId]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+router.delete('/hotel-days/:dayId', async (req, res) => {
+  await db.run('DELETE FROM pre_tour_days WHERE id=$1', [req.params.dayId]);
   res.json({ ok: true });
 });
 
