@@ -776,6 +776,33 @@ async function initSchema() {
   // pick the vendor up front too, so this is tracked directly on the trip.
   await pool.query(`ALTER TABLE transport_trips ADD COLUMN IF NOT EXISTS partner_id INTEGER REFERENCES partners(id) ON DELETE SET NULL;`);
 
+  // Media library gains a third type: uploadable Print materials & more
+  // (PDFs, brochures, itinerary sheets, etc.) alongside the existing
+  // video/poster loop content — same storage/CRUD machinery, just a new
+  // allowed value on the type CHECK.
+  await pool.query(`ALTER TABLE media DROP CONSTRAINT IF EXISTS media_type_check;`);
+  await pool.query(`ALTER TABLE media ADD CONSTRAINT media_type_check CHECK (type IN ('video','poster','document'));`);
+
+  // Pre Tours are Full Board tours that can span multiple hotels across
+  // their duration, and — per the host committee's ask — the hotel a group
+  // sleeps at on a given day isn't always the hotel that serves their meals
+  // that day. This table tracks that day-by-day, decoupled from
+  // pre_tour_itinerary (which stays a free-form activity agenda) so a tour
+  // can have activities without a hotel plan yet, or vice versa.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS pre_tour_days (
+      id SERIAL PRIMARY KEY,
+      pre_tour_id INTEGER NOT NULL REFERENCES pre_tours(id) ON DELETE CASCADE,
+      day_date DATE,
+      day_label TEXT NOT NULL,
+      stay_hotel_id INTEGER REFERENCES hotels(id) ON DELETE SET NULL,
+      meal_hotel_id INTEGER REFERENCES hotels(id) ON DELETE SET NULL,
+      notes TEXT,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+
   // One-time seed of the master checklist templates — only runs while the
   // table is still empty, so it never overwrites anything an admin has since
   // added, edited, or deleted from the Checklists & Milestones tab. These
