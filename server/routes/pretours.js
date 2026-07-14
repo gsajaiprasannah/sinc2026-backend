@@ -28,8 +28,12 @@ router.get('/', async (req, res) => {
 // literal paths are never swallowed as an id.
 router.get('/vehicles-lite', async (req, res) => {
   try {
+    // partner_id is included (not just for display) so the "Transport for
+    // this tour" form can filter this list down to only the vehicles
+    // belonging to whichever Transport partner was picked first — same
+    // reasoning as transport.js's own vehicles-lite.
     const rows = await db.all(`
-      SELECT id, vehicle_code, vehicle_type, model, seating_capacity
+      SELECT id, vehicle_code, vehicle_type, model, seating_capacity, partner_id
       FROM vehicles ORDER BY vehicle_code
     `);
     res.json(rows);
@@ -40,11 +44,24 @@ router.get('/vehicles-lite', async (req, res) => {
 router.get('/drivers-lite', async (req, res) => {
   try {
     const rows = await db.all(`
-      SELECT d.id, d.name, d.vehicle_id, v.vehicle_code
+      SELECT d.id, d.name, d.vehicle_id, d.partner_id, v.vehicle_code
       FROM drivers d
       LEFT JOIN vehicles v ON v.id = d.vehicle_id
       ORDER BY d.name
     `);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+// Minimal Transport Partner (vendor company) lookup for the "Transport for
+// this tour" form's Transporter field — same reasoning as vehicles-lite/
+// drivers-lite: a committee only granted the Pre Tours module still needs
+// real vendor names, not a raw numeric id. Mirrors transport.js's own
+// partners-lite exactly.
+router.get('/partners-lite', async (req, res) => {
+  try {
+    const rows = await db.all(`SELECT id, name, category FROM partners ORDER BY name`);
     res.json(rows);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -343,10 +360,12 @@ router.get('/:id/trips', async (req, res) => {
     const rows = await db.all(`
       SELECT t.*, v.vehicle_code, v.vehicle_type, v.model AS vehicle_model, v.seating_capacity,
         d.name AS driver_name, d.phone AS driver_phone,
+        p.name AS partner_name,
         (SELECT COUNT(*) FROM transport_trip_passengers tp WHERE tp.trip_id = t.id) AS passenger_count
       FROM transport_trips t
       LEFT JOIN vehicles v ON v.id = t.vehicle_id
       LEFT JOIN drivers d ON d.id = t.driver_id
+      LEFT JOIN partners p ON p.id = t.partner_id
       WHERE t.pre_tour_id = $1
       ORDER BY t.trip_date NULLS LAST, t.depart_time, t.id DESC
     `, [req.params.id]);
@@ -357,14 +376,14 @@ router.get('/:id/trips', async (req, res) => {
 });
 
 router.post('/:id/trips', async (req, res) => {
-  const { trip_date, depart_time, from_location, to_location, purpose, vehicle_id, driver_id, notes } = req.body;
+  const { trip_date, depart_time, from_location, to_location, purpose, vehicle_id, driver_id, partner_id, notes } = req.body;
   if (!from_location || !to_location) return res.status(400).json({ error: 'from_location and to_location are required' });
   try {
     const result = await db.run(`
-      INSERT INTO transport_trips (pre_tour_id, trip_date, depart_time, from_location, to_location, purpose, vehicle_id, driver_id, status, notes)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'planned',$9) RETURNING id
+      INSERT INTO transport_trips (pre_tour_id, trip_date, depart_time, from_location, to_location, purpose, vehicle_id, driver_id, partner_id, status, notes)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'planned',$10) RETURNING id
     `, [req.params.id, trip_date || null, depart_time || '', from_location, to_location,
-        purpose || '', vehicle_id || null, driver_id || null, notes || '']);
+        purpose || '', vehicle_id || null, driver_id || null, partner_id || null, notes || '']);
     if (driver_id) {
       const u = await db.get('SELECT id FROM users WHERE driver_id=$1', [driver_id]);
       if (u) {
