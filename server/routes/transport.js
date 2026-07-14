@@ -137,8 +137,11 @@ router.get('/departures-queue', async (req, res) => {
 // requiring the committee to also be granted those other two modules.
 router.get('/vehicles-lite', async (req, res) => {
   try {
+    // partner_id is included (not just for display) so the trip form can
+    // filter this list down to only the vehicles belonging to whichever
+    // Transport partner was picked first.
     const rows = await db.all(`
-      SELECT id, vehicle_code, vehicle_type, model, seating_capacity
+      SELECT id, vehicle_code, vehicle_type, model, seating_capacity, partner_id
       FROM vehicles ORDER BY vehicle_code
     `);
     res.json(rows);
@@ -149,7 +152,7 @@ router.get('/vehicles-lite', async (req, res) => {
 router.get('/drivers-lite', async (req, res) => {
   try {
     const rows = await db.all(`
-      SELECT d.id, d.name, d.vehicle_id, v.vehicle_code
+      SELECT d.id, d.name, d.vehicle_id, d.partner_id, v.vehicle_code
       FROM drivers d
       LEFT JOIN vehicles v ON v.id = d.vehicle_id
       ORDER BY d.name
