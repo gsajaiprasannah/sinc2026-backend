@@ -197,15 +197,38 @@ router.put('/users/:id/reject', requireSuperAdmin, async (req, res) => {
 });
 
 router.put('/users/:id', requireSuperAdmin, async (req, res) => {
-  const { role, status, host_member_id, driver_id, partner_id, vendor_id } = req.body;
+  const { role, status, host_member_id, driver_id, partner_id, volunteer_id, vendor_id } = req.body;
   try {
-    await db.run(
-      `UPDATE users SET role=COALESCE($1,role), status=COALESCE($2,status),
-        host_member_id=COALESCE($3,host_member_id), driver_id=COALESCE($4,driver_id), partner_id=COALESCE($5,partner_id),
-        vendor_id=COALESCE($6,vendor_id)
-       WHERE id=$7`,
-      [role || null, status || null, host_member_id || null, driver_id || null, partner_id || null, vendor_id || null, req.params.id]
-    );
+    if (role !== undefined && role !== null && role !== '') {
+      if (!ALL_ROLES.includes(role)) return res.status(400).json({ error: 'Not a recognized role.' });
+      const linked = LINKED_ROLE_FIELDS[role];
+      const linkedValues = { host_member_id: host_member_id || null, driver_id: driver_id || null, partner_id: partner_id || null, volunteer_id: volunteer_id || null, vendor_id: vendor_id || null };
+      if (linked && !linkedValues[linked.column]) {
+        return res.status(400).json({ error: `Choose which ${linked.label} this login belongs to.` });
+      }
+      // Switching roles: only the column matching the NEW role keeps a value —
+      // every other linked column is explicitly cleared so a stale id from a
+      // previous role (e.g. host_member_id lingering after switching to media)
+      // can never leak through. COALESCE can't express "clear this", it only
+      // ever preserves the old value, so a role change uses plain assignment
+      // instead of COALESCE for all five linked columns.
+      await db.run(
+        `UPDATE users SET role=$1, status=COALESCE($2,status),
+          host_member_id=$3, driver_id=$4, partner_id=$5, volunteer_id=$6, vendor_id=$7
+         WHERE id=$8`,
+        [role, status || null,
+          linked?.column === 'host_member_id' ? linkedValues.host_member_id : null,
+          linked?.column === 'driver_id' ? linkedValues.driver_id : null,
+          linked?.column === 'partner_id' ? linkedValues.partner_id : null,
+          linked?.column === 'volunteer_id' ? linkedValues.volunteer_id : null,
+          linked?.column === 'vendor_id' ? linkedValues.vendor_id : null,
+          req.params.id]
+      );
+    } else {
+      // No role change requested (e.g. approving/suspending without touching
+      // role) — leave every linked column untouched.
+      await db.run(`UPDATE users SET status=COALESCE($1,status) WHERE id=$2`, [status || null, req.params.id]);
+    }
     logActivity(req.user, { action: 'update', entityType: 'user', entityId: Number(req.params.id), details: `role: ${role || '—'}, status: ${status || '—'}` });
     res.json({ ok: true });
   } catch (e) {
