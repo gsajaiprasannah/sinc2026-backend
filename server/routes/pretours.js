@@ -187,18 +187,28 @@ router.delete('/itinerary/:itemId', async (req, res) => {
   res.json({ ok: true });
 });
 
-// --- Day-by-day Hotel Plan (Full Board tours): the stay hotel and the meal
-// hotel for a given day, since a group's dinner venue doesn't always match
-// where they're sleeping that night. Deliberately its own table rather than
-// columns on pre_tour_itinerary — a tour can have an activity agenda without
-// a hotel plan yet, or vice versa, and this keeps both editable independently.
+// --- Day-by-day Hotel Plan (Full Board tours): the stay hotel plus a
+// separate hotel for each of the day's 5 sittings — breakfast, hi-tea 1,
+// lunch, hi-tea 2, dinner — since none of those is guaranteed to happen at
+// the hotel the group is sleeping in that night. Deliberately its own table
+// rather than columns on pre_tour_itinerary — a tour can have an activity
+// agenda without a hotel plan yet, or vice versa, and this keeps both
+// editable independently.
 router.get('/:id/hotel-days', async (req, res) => {
   try {
     const rows = await db.all(`
-      SELECT hd.*, sh.name AS stay_hotel_name, mh.name AS meal_hotel_name
+      SELECT hd.*,
+        sh.name AS stay_hotel_name,
+        bh.name AS breakfast_hotel_name, h1.name AS hitea1_hotel_name,
+        lh.name AS lunch_hotel_name, h2.name AS hitea2_hotel_name,
+        dh.name AS dinner_hotel_name
       FROM pre_tour_days hd
       LEFT JOIN hotels sh ON sh.id = hd.stay_hotel_id
-      LEFT JOIN hotels mh ON mh.id = hd.meal_hotel_id
+      LEFT JOIN hotels bh ON bh.id = hd.breakfast_hotel_id
+      LEFT JOIN hotels h1 ON h1.id = hd.hitea1_hotel_id
+      LEFT JOIN hotels lh ON lh.id = hd.lunch_hotel_id
+      LEFT JOIN hotels h2 ON h2.id = hd.hitea2_hotel_id
+      LEFT JOIN hotels dh ON dh.id = hd.dinner_hotel_id
       WHERE hd.pre_tour_id=$1
       ORDER BY hd.sort_order, hd.day_date NULLS LAST, hd.id
     `, [req.params.id]);
@@ -209,13 +219,23 @@ router.get('/:id/hotel-days', async (req, res) => {
 });
 
 router.post('/:id/hotel-days', async (req, res) => {
-  const { day_date, day_label, stay_hotel_id, meal_hotel_id, notes, sort_order } = req.body;
+  const {
+    day_date, day_label, stay_hotel_id,
+    breakfast_hotel_id, hitea1_hotel_id, lunch_hotel_id, hitea2_hotel_id, dinner_hotel_id,
+    notes, sort_order
+  } = req.body;
   if (!day_label) return res.status(400).json({ error: 'day_label is required' });
   try {
     const result = await db.run(`
-      INSERT INTO pre_tour_days (pre_tour_id, day_date, day_label, stay_hotel_id, meal_hotel_id, notes, sort_order)
-      VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id
-    `, [req.params.id, day_date || null, day_label, stay_hotel_id || null, meal_hotel_id || null,
+      INSERT INTO pre_tour_days (
+        pre_tour_id, day_date, day_label, stay_hotel_id,
+        breakfast_hotel_id, hitea1_hotel_id, lunch_hotel_id, hitea2_hotel_id, dinner_hotel_id,
+        notes, sort_order
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id
+    `, [req.params.id, day_date || null, day_label, stay_hotel_id || null,
+        breakfast_hotel_id || null, hitea1_hotel_id || null, lunch_hotel_id || null,
+        hitea2_hotel_id || null, dinner_hotel_id || null,
         notes || '', Number(sort_order) || 0]);
     res.json({ id: result.id });
   } catch (e) {
@@ -224,15 +244,22 @@ router.post('/:id/hotel-days', async (req, res) => {
 });
 
 router.put('/hotel-days/:dayId', async (req, res) => {
-  const { day_date, day_label, stay_hotel_id, meal_hotel_id, notes, sort_order } = req.body;
+  const {
+    day_date, day_label, stay_hotel_id,
+    breakfast_hotel_id, hitea1_hotel_id, lunch_hotel_id, hitea2_hotel_id, dinner_hotel_id,
+    notes, sort_order
+  } = req.body;
   try {
     await db.run(`
       UPDATE pre_tour_days SET
         day_date=COALESCE($1,day_date), day_label=COALESCE($2,day_label),
-        stay_hotel_id=$3, meal_hotel_id=$4,
-        notes=COALESCE($5,notes), sort_order=COALESCE($6,sort_order)
-      WHERE id=$7
-    `, [day_date || null, day_label || null, stay_hotel_id || null, meal_hotel_id || null,
+        stay_hotel_id=$3,
+        breakfast_hotel_id=$4, hitea1_hotel_id=$5, lunch_hotel_id=$6, hitea2_hotel_id=$7, dinner_hotel_id=$8,
+        notes=COALESCE($9,notes), sort_order=COALESCE($10,sort_order)
+      WHERE id=$11
+    `, [day_date || null, day_label || null, stay_hotel_id || null,
+        breakfast_hotel_id || null, hitea1_hotel_id || null, lunch_hotel_id || null,
+        hitea2_hotel_id || null, dinner_hotel_id || null,
         notes !== undefined ? notes : null, sort_order !== undefined ? Number(sort_order) : null, req.params.dayId]);
     res.json({ ok: true });
   } catch (e) {
