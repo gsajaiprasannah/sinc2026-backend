@@ -769,6 +769,13 @@ async function initSchema() {
   await pool.query(`ALTER TABLE transport_trips DROP CONSTRAINT IF EXISTS transport_trips_trip_type_check;`);
   await pool.query(`ALTER TABLE transport_trips ADD CONSTRAINT transport_trips_trip_type_check CHECK (trip_type IN ('arrival','departure','general'));`);
 
+  // Lets a trip name which transport partner (vendor company) supplied the
+  // vehicle/driver, in addition to the specific vehicle_id/driver_id already
+  // on the row. Vehicles and Drivers already link to a partner individually,
+  // but a committee planning a trip via the self-service portal wants to
+  // pick the vendor up front too, so this is tracked directly on the trip.
+  await pool.query(`ALTER TABLE transport_trips ADD COLUMN IF NOT EXISTS partner_id INTEGER REFERENCES partners(id) ON DELETE SET NULL;`);
+
   // One-time seed of the master checklist templates — only runs while the
   // table is still empty, so it never overwrites anything an admin has since
   // added, edited, or deleted from the Checklists & Milestones tab. These
