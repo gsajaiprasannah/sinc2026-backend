@@ -36,10 +36,12 @@ router.get('/', async (req, res) => {
     const rows = await db.all(`
       SELECT t.*, v.vehicle_code, v.vehicle_type, v.model AS vehicle_model, v.seating_capacity,
         d.name AS driver_name, d.phone AS driver_phone,
+        p.name AS partner_name,
         (SELECT COUNT(*) FROM transport_trip_passengers tp WHERE tp.trip_id = t.id) AS passenger_count
       FROM transport_trips t
       LEFT JOIN vehicles v ON v.id = t.vehicle_id
       LEFT JOIN drivers d ON d.id = t.driver_id
+      LEFT JOIN partners p ON p.id = t.partner_id
       ${where}
       ORDER BY t.trip_date DESC NULLS LAST, t.depart_time, t.id DESC
     `, params);
@@ -157,6 +159,18 @@ router.get('/drivers-lite', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+// Minimal Transport Partner (vendor company) lookup for the trip form's new
+// "Transport partner" field — same reasoning as vehicles-lite/drivers-lite:
+// a committee only granted Transport Planning still needs real vendor names,
+// not a raw numeric id.
+router.get('/partners-lite', async (req, res) => {
+  try {
+    const rows = await db.all(`SELECT id, name, category FROM partners ORDER BY name`);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // Minimal Delegate/Host Member lookups for the passenger-manifest form's
 // "Passenger type" toggle — same reasoning as vehicles-lite/drivers-lite
@@ -224,10 +238,12 @@ router.get('/:id', async (req, res) => {
   try {
     const trip = await db.get(`
       SELECT t.*, v.vehicle_code, v.vehicle_type, v.model AS vehicle_model, v.seating_capacity,
-        d.name AS driver_name, d.phone AS driver_phone
+        d.name AS driver_name, d.phone AS driver_phone,
+        p.name AS partner_name
       FROM transport_trips t
       LEFT JOIN vehicles v ON v.id = t.vehicle_id
       LEFT JOIN drivers d ON d.id = t.driver_id
+      LEFT JOIN partners p ON p.id = t.partner_id
       WHERE t.id = $1
     `, [req.params.id]);
     if (!trip) return res.status(404).json({ error: 'not found' });
@@ -248,14 +264,14 @@ router.get('/:id', async (req, res) => {
 });
 
 router.post('/', async (req, res) => {
-  const { pre_tour_id, trip_date, depart_time, from_location, to_location, purpose, vehicle_id, driver_id, status, notes } = req.body;
+  const { pre_tour_id, trip_date, depart_time, from_location, to_location, purpose, vehicle_id, driver_id, partner_id, status, notes } = req.body;
   if (!from_location || !to_location) return res.status(400).json({ error: 'from_location and to_location are required' });
   try {
     const result = await db.run(`
-      INSERT INTO transport_trips (pre_tour_id, trip_date, depart_time, from_location, to_location, purpose, vehicle_id, driver_id, status, notes)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id
+      INSERT INTO transport_trips (pre_tour_id, trip_date, depart_time, from_location, to_location, purpose, vehicle_id, driver_id, partner_id, status, notes)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id
     `, [pre_tour_id || null, trip_date || null, depart_time || '', from_location, to_location,
-        purpose || '', vehicle_id || null, driver_id || null, status || 'planned', notes || '']);
+        purpose || '', vehicle_id || null, driver_id || null, partner_id || null, status || 'planned', notes || '']);
     if (driver_id) {
       notifyDriverAssigned(driver_id, { from_location, to_location, trip_date, depart_time });
     }
@@ -267,7 +283,7 @@ router.post('/', async (req, res) => {
 });
 
 router.put('/:id', async (req, res) => {
-  const { trip_date, depart_time, from_location, to_location, purpose, vehicle_id, driver_id, status, notes } = req.body;
+  const { trip_date, depart_time, from_location, to_location, purpose, vehicle_id, driver_id, partner_id, status, notes } = req.body;
   try {
     const before = await db.get('SELECT driver_id FROM transport_trips WHERE id=$1', [req.params.id]);
     await db.run(`
@@ -275,11 +291,12 @@ router.put('/:id', async (req, res) => {
         trip_date=COALESCE($1,trip_date), depart_time=COALESCE($2,depart_time),
         from_location=COALESCE($3,from_location), to_location=COALESCE($4,to_location),
         purpose=COALESCE($5,purpose), vehicle_id=COALESCE($6,vehicle_id), driver_id=COALESCE($7,driver_id),
-        status=COALESCE($8,status), notes=COALESCE($9,notes), updated_at=NOW()
-      WHERE id=$10
+        partner_id=COALESCE($8,partner_id),
+        status=COALESCE($9,status), notes=COALESCE($10,notes), updated_at=NOW()
+      WHERE id=$11
     `, [trip_date || null, depart_time !== undefined ? depart_time : null,
         from_location || null, to_location || null, purpose !== undefined ? purpose : null,
-        vehicle_id || null, driver_id || null, status || null,
+        vehicle_id || null, driver_id || null, partner_id || null, status || null,
         notes !== undefined ? notes : null, req.params.id]);
     if (driver_id && before && String(driver_id) !== String(before.driver_id)) {
       const updated = await db.get('SELECT * FROM transport_trips WHERE id=$1', [req.params.id]);
