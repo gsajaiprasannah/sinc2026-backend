@@ -45,6 +45,17 @@ app.use('/api/push', require('./routes/push'));
 // Mounted unwrapped, same pattern as /api/push and /api/host.
 app.use('/api/messages', require('./routes/messages'));
 
+// Public, no-login "update my own details" route — lets any delegate, host
+// member, or volunteer fill in their own Shirt Size / T-Shirt Size / Photo /
+// Business Card via a shared link (public/my-profile.html), without needing
+// an account. Every mutating call re-verifies name+phone server-side (see
+// the file header in publicProfile.js) so this can't be used to view or
+// change anyone else's data. Mounted early/unwrapped (like /api/push and
+// /api/host above) so it runs before the global mutating-methods auth gate
+// further down — that gate would otherwise block this route's POST/PUT
+// calls with "Login required.", defeating the whole point of a no-login page.
+app.use('/api/public-profile', require('./routes/publicProfile'));
+
 // --- Only a super admin may delete anything, across every resource (clubs, ---
 // --- registrations, participants, media, happenings, logins). A regular   ---
 // --- admin can still create/edit records, just not permanently remove     ---
@@ -231,14 +242,6 @@ app.use('/api/happenings', require('./routes/happenings'));
 // sections. The full /api/sponsors and /api/speakers routes below (with
 // contact details, checklists, etc.) stay admin-only.
 app.use('/api/public', require('./routes/publicDirectory'));
-
-// Public, no-login "update my own details" route — lets any delegate, host
-// member, or volunteer fill in their own Shirt Size / T-Shirt Size / Photo /
-// Business Card via a shared link (public/my-profile.html), without needing
-// an account. Every mutating call re-verifies name+phone server-side (see
-// the file header in publicProfile.js) so this can't be used to view or
-// change anyone else's data.
-app.use('/api/public-profile', require('./routes/publicProfile'));
 
 app.get('/api/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
