@@ -547,6 +547,35 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS inventory_distributions_recipient_idx ON inventory_distributions(recipient_type, recipient_id);
     CREATE INDEX IF NOT EXISTS inventory_distributions_assigned_idx ON inventory_distributions(assigned_host_member_id);
 
+    -- A "requirement" is a need raised for something to be procured — either
+    -- typed in manually (any goodie/inventory item) or auto-generated from
+    -- the Delegate/Host Member shirt & T-shirt size totals (the Merchandise
+    -- Requirement sync). The Purchase team reviews open requirements and, when
+    -- ready, raises an actual Purchase Request from one, which links back via
+    -- purchase_request_id and flows through the normal Finance approval
+    -- process. purchase_request_id's REFERENCES finance_transactions is added
+    -- later via ALTER TABLE once that table exists further down this file.
+    CREATE TABLE IF NOT EXISTS inventory_requirements (
+      id SERIAL PRIMARY KEY,
+      item_name TEXT NOT NULL,
+      category TEXT NOT NULL DEFAULT 'General',
+      size TEXT,
+      quantity_needed INTEGER NOT NULL DEFAULT 0,
+      unit TEXT NOT NULL DEFAULT 'pcs',
+      source TEXT NOT NULL DEFAULT 'manual' CHECK (source IN ('manual','auto-merchandise')),
+      status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','requested','fulfilled','cancelled')),
+      notes TEXT,
+      raised_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS inventory_requirements_status_idx ON inventory_requirements(status);
+    -- One auto-generated row per (category, size) pair, so re-syncing
+    -- merchandise totals updates the existing row instead of piling up
+    -- duplicates every time the counts change.
+    CREATE UNIQUE INDEX IF NOT EXISTS inventory_requirements_automerch_uidx
+      ON inventory_requirements(category, size) WHERE source = 'auto-merchandise';
+
     -- Web Push subscriptions (PWA push notifications) — one row per
     -- browser/device a logged-in user has "enabled notifications" on. A
     -- person can have more than one (phone + laptop), so this is keyed by
@@ -1168,6 +1197,12 @@ async function initSchema() {
   await pool.query(`CREATE INDEX IF NOT EXISTS finance_transactions_subtype_idx ON finance_transactions(subtype);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS finance_transactions_status_idx ON finance_transactions(status);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS finance_transactions_inventory_idx ON finance_transactions(inventory_item_id);`);
+
+  // Deferred FK: inventory_requirements is created earlier in this file
+  // (before finance_transactions exists), so the link back to whichever
+  // Purchase Request was raised from a requirement is added here instead.
+  await pool.query(`ALTER TABLE inventory_requirements ADD COLUMN IF NOT EXISTS purchase_request_id INTEGER REFERENCES finance_transactions(id) ON DELETE SET NULL;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS inventory_requirements_pr_idx ON inventory_requirements(purchase_request_id);`);
 
   // One row per required approver ROLE (not person) on an outward
   // transaction — e.g. a 'payment' gets 5 rows (one per office-bearer role),
