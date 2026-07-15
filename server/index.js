@@ -232,6 +232,14 @@ app.use('/api/happenings', require('./routes/happenings'));
 // contact details, checklists, etc.) stay admin-only.
 app.use('/api/public', require('./routes/publicDirectory'));
 
+// Public, no-login "update my own details" route — lets any delegate, host
+// member, or volunteer fill in their own Shirt Size / T-Shirt Size / Photo /
+// Business Card via a shared link (public/my-profile.html), without needing
+// an account. Every mutating call re-verifies name+phone server-side (see
+// the file header in publicProfile.js) so this can't be used to view or
+// change anyone else's data.
+app.use('/api/public-profile', require('./routes/publicProfile'));
+
 app.get('/api/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
 // Manual trigger for an on-demand backup (logged-in admins only) in addition

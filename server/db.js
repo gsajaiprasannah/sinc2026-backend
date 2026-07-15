@@ -713,6 +713,27 @@ async function initSchema() {
   await pool.query(`ALTER TABLE sponsors ADD COLUMN IF NOT EXISTS logo_url TEXT;`);
   await pool.query(`ALTER TABLE speakers ADD COLUMN IF NOT EXISTS photo_url TEXT;`);
 
+  // --- Congress-wide member data collection: Shirt Size, T-Shirt Size, a
+  // photo of the person, and a photo/scan of their business card. Requested
+  // for every delegate, host member, and volunteer so goodies/kits can be
+  // sized correctly and each person's profile can show a face + business
+  // card on file. Two distinct size fields on purpose — Shirt Size (formal)
+  // and T-Shirt Size (event tee) are not always the same for a given person.
+  // Stored the same way as sponsor logo_url/speaker photo_url (R2 https://
+  // URL, or a relative /uploads/... path) via uploadHelper.saveFile.
+  await pool.query(`ALTER TABLE participants ADD COLUMN IF NOT EXISTS shirt_size TEXT;`);
+  await pool.query(`ALTER TABLE participants ADD COLUMN IF NOT EXISTS tshirt_size TEXT;`);
+  await pool.query(`ALTER TABLE participants ADD COLUMN IF NOT EXISTS photo_url TEXT;`);
+  await pool.query(`ALTER TABLE participants ADD COLUMN IF NOT EXISTS business_card_url TEXT;`);
+  await pool.query(`ALTER TABLE host_members ADD COLUMN IF NOT EXISTS shirt_size TEXT;`);
+  await pool.query(`ALTER TABLE host_members ADD COLUMN IF NOT EXISTS tshirt_size TEXT;`);
+  await pool.query(`ALTER TABLE host_members ADD COLUMN IF NOT EXISTS photo_url TEXT;`);
+  await pool.query(`ALTER TABLE host_members ADD COLUMN IF NOT EXISTS business_card_url TEXT;`);
+  await pool.query(`ALTER TABLE volunteers ADD COLUMN IF NOT EXISTS shirt_size TEXT;`);
+  await pool.query(`ALTER TABLE volunteers ADD COLUMN IF NOT EXISTS tshirt_size TEXT;`);
+  await pool.query(`ALTER TABLE volunteers ADD COLUMN IF NOT EXISTS photo_url TEXT;`);
+  await pool.query(`ALTER TABLE volunteers ADD COLUMN IF NOT EXISTS business_card_url TEXT;`);
+
   // --- Committee leads, individual task delegation, and verification ---
   // A committee has one designated lead (enforced app-side in committees.js —
   // setting a new lead clears the flag on any other member of that committee)
