@@ -9,6 +9,7 @@
 const express = require('express');
 const db = require('../db');
 const { logActivity } = require('../lib/activityLogger');
+const { createApprovalRows } = require('../lib/financeHelper');
 
 const router = express.Router();
 
@@ -135,6 +136,223 @@ router.get('/host-members-lite', async (req, res) => {
     res.json(rows);
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// --- Merchandise Requirement ---
+// Rolls up how many Shirt-size / T-Shirt-size units are needed for
+// procurement, counted from the shirt_size/tshirt_size fields collected on
+// Delegates (participants) and Host Members — kept as two separate totals
+// since they're typically ordered/handed out separately. Surfaced as a
+// chart in the Goodies & Inventory tab so whoever's placing the merchandise
+// order can see exact per-size counts without exporting a spreadsheet.
+const MERCH_SIZE_ORDER = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL'];
+async function merchSizeBreakdown(table, column) {
+  const rows = await db.all(`
+    SELECT ${column} AS size, COUNT(*)::int AS n
+    FROM ${table}
+    WHERE ${column} IS NOT NULL AND ${column} <> ''
+    GROUP BY ${column}
+  `);
+  const map = {};
+  rows.forEach((r) => { map[r.size] = Number(r.n); });
+  const known = MERCH_SIZE_ORDER.filter((s) => map[s]).map((size) => ({ size, count: map[size] }));
+  const other = Object.keys(map).filter((s) => !MERCH_SIZE_ORDER.includes(s)).sort()
+    .map((size) => ({ size, count: map[size] }));
+  return [...known, ...other];
+}
+router.get('/merchandise-requirement', async (req, res) => {
+  try {
+    const [delegateShirt, delegateTee, hostShirt, hostTee] = await Promise.all([
+      merchSizeBreakdown('participants', 'shirt_size'),
+      merchSizeBreakdown('participants', 'tshirt_size'),
+      merchSizeBreakdown('host_members', 'shirt_size'),
+      merchSizeBreakdown('host_members', 'tshirt_size'),
+    ]);
+    const delegateTotal = (await db.get('SELECT COUNT(*)::int AS n FROM participants')).n;
+    const hostTotal = (await db.get('SELECT COUNT(*)::int AS n FROM host_members')).n;
+    const delegateSized = (await db.get(`SELECT COUNT(*)::int AS n FROM participants WHERE shirt_size IS NOT NULL AND shirt_size <> '' OR tshirt_size IS NOT NULL AND tshirt_size <> ''`)).n;
+    const hostSized = (await db.get(`SELECT COUNT(*)::int AS n FROM host_members WHERE shirt_size IS NOT NULL AND shirt_size <> '' OR tshirt_size IS NOT NULL AND tshirt_size <> ''`)).n;
+    res.json({
+      delegates: { total: delegateTotal, sizesOnFile: delegateSized, shirt: delegateShirt, tshirt: delegateTee },
+      hostMembers: { total: hostTotal, sizesOnFile: hostSized, shirt: hostShirt, tshirt: hostTee },
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// --- Requirements: procurement asks that flow through to a real Finance
+// Purchase Request. Distinct from inventory_items (the stock list) — a
+// requirement doesn't track stock of its own, it's just something someone
+// needs, waiting for the Purchase team to either raise a PR for it or
+// dismiss it. Registered before the /:id-shaped inventory_items routes
+// below so literal paths are never swallowed as an id.
+router.get('/requirements', async (req, res) => {
+  try {
+    const rows = await db.all(`
+      SELECT r.*, ft.status AS purchase_request_status, u.username AS raised_by_username
+      FROM inventory_requirements r
+      LEFT JOIN finance_transactions ft ON ft.id = r.purchase_request_id
+      LEFT JOIN users u ON u.id = r.raised_by
+      ORDER BY (r.status = 'open') DESC, r.category, r.size NULLS FIRST, r.item_name
+    `);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post('/requirements', async (req, res) => {
+  const { item_name, category, size, quantity_needed, unit, notes } = req.body;
+  if (!item_name || !item_name.trim()) return res.status(400).json({ error: 'item_name is required' });
+  const qty = Number(quantity_needed) || 0;
+  if (qty <= 0) return res.status(400).json({ error: 'A positive quantity_needed is required' });
+  try {
+    const result = await db.run(`
+      INSERT INTO inventory_requirements (item_name, category, size, quantity_needed, unit, source, status, notes, raised_by)
+      VALUES ($1,$2,$3,$4,$5,'manual','open',$6,$7) RETURNING id
+    `, [item_name.trim(), category || 'General', size || null, qty, unit || 'pcs', notes || '', req.user?.id || null]);
+    logActivity(req.user, { action: 'create', entityType: 'inventory_requirement', entityId: result.id, label: item_name.trim() });
+    res.json({ id: result.id });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+router.put('/requirements/:id', async (req, res) => {
+  try {
+    const existing = await db.get('SELECT * FROM inventory_requirements WHERE id=$1', [req.params.id]);
+    if (!existing) return res.status(404).json({ error: 'Requirement not found.' });
+    const { item_name, category, size, quantity_needed, unit, notes, status } = req.body;
+    if (status && !['open', 'requested', 'fulfilled', 'cancelled'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid status' });
+    }
+    await db.run(`
+      UPDATE inventory_requirements SET
+        item_name=COALESCE($1,item_name), category=COALESCE($2,category), size=$3,
+        quantity_needed=COALESCE($4,quantity_needed), unit=COALESCE($5,unit),
+        notes=COALESCE($6,notes), status=COALESCE($7,status), updated_at=NOW()
+      WHERE id=$8
+    `, [item_name || null, category || null, size !== undefined ? (size || null) : existing.size,
+        quantity_needed !== undefined && quantity_needed !== '' ? Number(quantity_needed) : null,
+        unit || null, notes !== undefined ? notes : null, status || null, req.params.id]);
+    logActivity(req.user, { action: 'update', entityType: 'inventory_requirement', entityId: Number(req.params.id) });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+router.delete('/requirements/:id', async (req, res) => {
+  try {
+    const existing = await db.get('SELECT item_name FROM inventory_requirements WHERE id=$1', [req.params.id]);
+    if (!existing) return res.status(404).json({ error: 'Requirement not found.' });
+    await db.run('DELETE FROM inventory_requirements WHERE id=$1', [req.params.id]);
+    logActivity(req.user, { action: 'delete', entityType: 'inventory_requirement', entityId: Number(req.params.id), label: existing.item_name });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// Recomputes the Delegate/Host Member shirt & T-shirt size totals (same
+// numbers as GET /merchandise-requirement) and upserts them into
+// inventory_requirements as source='auto-merchandise' rows, one per
+// (category, size). Safe to re-run: an existing row for a bucket that's
+// still 'open' gets its quantity refreshed in place; a bucket already moved
+// to 'requested'/'fulfilled'/'cancelled' by the Purchase team is left
+// completely untouched so re-syncing can't silently reopen or resize
+// something they've already actioned. A bucket that drops to zero (e.g.
+// everyone in that size updated their info) is removed, but only while
+// still 'open'.
+const MERCH_GROUPS = [
+  { table: 'participants', column: 'shirt_size', category: 'Merchandise – Shirt – Delegates', label: 'Shirt' },
+  { table: 'participants', column: 'tshirt_size', category: 'Merchandise – Tee – Delegates', label: 'Tee' },
+  { table: 'host_members', column: 'shirt_size', category: 'Merchandise – Shirt – Host Members', label: 'Shirt' },
+  { table: 'host_members', column: 'tshirt_size', category: 'Merchandise – Tee – Host Members', label: 'Tee' },
+];
+router.post('/requirements/sync-merchandise', async (req, res) => {
+  try {
+    let created = 0, updated = 0, skipped = 0;
+    const keptIds = [];
+    for (const group of MERCH_GROUPS) {
+      const breakdown = await merchSizeBreakdown(group.table, group.column);
+      for (const { size, count } of breakdown) {
+        const existing = await db.get(
+          `SELECT id, status FROM inventory_requirements WHERE source='auto-merchandise' AND category=$1 AND size=$2`,
+          [group.category, size]
+        );
+        if (existing) {
+          keptIds.push(existing.id);
+          if (existing.status === 'open') {
+            await db.run(`UPDATE inventory_requirements SET quantity_needed=$1, updated_at=NOW() WHERE id=$2`, [count, existing.id]);
+            updated++;
+          } else {
+            skipped++;
+          }
+        } else {
+          const result = await db.run(`
+            INSERT INTO inventory_requirements (item_name, category, size, quantity_needed, unit, source, status)
+            VALUES ($1,$2,$3,$4,'pcs','auto-merchandise','open') RETURNING id
+          `, [`${group.label} size ${size}`, group.category, size, count]);
+          keptIds.push(result.id);
+          created++;
+        }
+      }
+    }
+    if (keptIds.length) {
+      await db.run(
+        `DELETE FROM inventory_requirements WHERE source='auto-merchandise' AND status='open' AND id NOT IN (${keptIds.map((_, i) => `$${i + 1}`).join(',')})`,
+        keptIds
+      );
+    } else {
+      await db.run(`DELETE FROM inventory_requirements WHERE source='auto-merchandise' AND status='open'`);
+    }
+    res.json({ ok: true, created, updated, skipped });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Turns an open requirement into a real Finance Purchase Request — the same
+// underlying finance_transactions row that POST /api/finance/purchases
+// creates, just pre-filled from the requirement so the Purchase team doesn't
+// have to re-type what's already there. Requires a unit cost (needed to
+// compute the PR amount); vendor + expected delivery date are optional.
+router.post('/requirements/:id/raise-purchase-request', async (req, res) => {
+  const { purchase_unit_cost, vendor_id, expected_delivery_date, payee_or_payer, notes } = req.body;
+  const unitCost = Number(purchase_unit_cost) || 0;
+  if (unitCost <= 0) return res.status(400).json({ error: 'A positive purchase_unit_cost is required' });
+  try {
+    const reqRow = await db.get('SELECT * FROM inventory_requirements WHERE id=$1', [req.params.id]);
+    if (!reqRow) return res.status(404).json({ error: 'Requirement not found.' });
+    if (reqRow.purchase_request_id) return res.status(409).json({ error: 'A purchase request has already been raised for this requirement.' });
+    let payee = payee_or_payer || '';
+    if (vendor_id && !payee.trim()) {
+      const v = await db.get('SELECT name FROM vendors WHERE id=$1', [vendor_id]);
+      if (v) payee = v.name;
+    }
+    const amount = reqRow.quantity_needed * unitCost;
+    const itemLabel = reqRow.size ? `${reqRow.item_name} (${reqRow.size})` : reqRow.item_name;
+    const result = await db.run(`
+      INSERT INTO finance_transactions (
+        type, subtype, category, payee_or_payer, amount, description, status, notes,
+        purchase_item_name, purchase_category, purchase_unit, purchase_quantity, purchase_unit_cost, created_by,
+        vendor_id, expected_delivery_date
+      )
+      VALUES ('outward','purchase',$1,$2,$3,$4,'pending_approval',$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id
+    `, [
+      reqRow.category, payee, amount, `Raised from requirement: ${itemLabel}`, notes || reqRow.notes || '',
+      itemLabel, reqRow.category, reqRow.unit, reqRow.quantity_needed, unitCost, req.user?.id || null,
+      vendor_id || null, expected_delivery_date || null
+    ]);
+    await createApprovalRows(result.id, 'purchase');
+    await db.run(`UPDATE inventory_requirements SET status='requested', purchase_request_id=$1, updated_at=NOW() WHERE id=$2`, [result.id, req.params.id]);
+    logActivity(req.user, { action: 'create', entityType: 'finance_purchase_request', entityId: result.id, label: itemLabel });
+    res.json({ id: result.id, purchase_request_id: result.id });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
   }
 });
 
