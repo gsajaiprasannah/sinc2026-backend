@@ -4,14 +4,17 @@
 // see or edit another's data (the admin panel is where the full cross-member
 // view lives).
 const express = require('express');
+const multer = require('multer');
 const db = require('../db');
 const { requireAuth } = require('../auth');
 const push = require('../pushHelper');
 const { grantedModulesForHostMember } = require('./committeeModuleAccess');
 const { logActivity } = require('../lib/activityLogger');
 const { finalizeApprovalIfReady } = require('../lib/financeHelper');
+const { saveFile, deleteStoredFile } = require('../uploadHelper');
 
 const router = express.Router();
+const uploadImage = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 async function myHostMemberId(req) {
   const row = await db.get('SELECT host_member_id FROM users WHERE id=$1', [req.user.id]);
@@ -255,6 +258,68 @@ router.get('/me', requireHostMember, async (req, res) => {
     res.json({ profile, committees, committeeTasks, leadCommittees, moduleAccess, assignments, tasks, guestRelations, goodiesChecklist, committeeChecklists, committeeDeliveries });
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// Self-fill: Shirt Size / T-Shirt Size / Photo / Business Card. Scoped to
+// req.hostMemberId (their own row only) via requireHostMember — mirrors the
+// admin-side fields in server/routes/hostmembers.js one-for-one, but lets
+// the host member themselves fill these in from their own portal instead of
+// needing an admin to do it (or the public/my-profile.html link, for those
+// who'd rather not log in at all).
+router.put('/me/sizes', requireHostMember, async (req, res) => {
+  const { shirt_size, tshirt_size } = req.body;
+  try {
+    await db.run('UPDATE host_members SET shirt_size=$1, tshirt_size=$2 WHERE id=$3', [
+      shirt_size || null, tshirt_size || null, req.hostMemberId
+    ]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+router.post('/me/photo', requireHostMember, (req, res, next) => {
+  uploadImage.single('file')(req, res, (err) => {
+    if (err) {
+      const friendly = err.code === 'LIMIT_FILE_SIZE' ? 'Photo is too large (max 10MB).' : 'Upload was interrupted — please try again.';
+      return res.status(400).json({ error: friendly });
+    }
+    next();
+  });
+}, async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'file is required' });
+  try {
+    const existing = await db.get('SELECT photo_url FROM host_members WHERE id=$1', [req.hostMemberId]);
+    const storedPath = await saveFile(req.file, 'hostmember-photos');
+    await db.run('UPDATE host_members SET photo_url=$1 WHERE id=$2', [storedPath, req.hostMemberId]);
+    if (existing && existing.photo_url) await deleteStoredFile(existing.photo_url);
+    res.json({ photo_url: storedPath });
+  } catch (e) {
+    console.error('Host member self-service photo upload failed —', e.message);
+    res.status(500).json({ error: 'Upload failed: ' + e.message });
+  }
+});
+
+router.post('/me/business-card', requireHostMember, (req, res, next) => {
+  uploadImage.single('file')(req, res, (err) => {
+    if (err) {
+      const friendly = err.code === 'LIMIT_FILE_SIZE' ? 'Image is too large (max 10MB).' : 'Upload was interrupted — please try again.';
+      return res.status(400).json({ error: friendly });
+    }
+    next();
+  });
+}, async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'file is required' });
+  try {
+    const existing = await db.get('SELECT business_card_url FROM host_members WHERE id=$1', [req.hostMemberId]);
+    const storedPath = await saveFile(req.file, 'hostmember-business-cards');
+    await db.run('UPDATE host_members SET business_card_url=$1 WHERE id=$2', [storedPath, req.hostMemberId]);
+    if (existing && existing.business_card_url) await deleteStoredFile(existing.business_card_url);
+    res.json({ business_card_url: storedPath });
+  } catch (e) {
+    console.error('Host member self-service business card upload failed —', e.message);
+    res.status(500).json({ error: 'Upload failed: ' + e.message });
   }
 });
 

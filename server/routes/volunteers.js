@@ -6,11 +6,16 @@
 // DIRECTLY (no committee membership required — see committeeModuleAccess.js's
 // grantedModulesForVolunteer()/requireModuleAccess()).
 const express = require('express');
+const multer = require('multer');
 const db = require('../db');
 const { MODULE_KEYS, isValidModuleKey } = require('./committeeModuleAccess');
+const { saveFile, deleteStoredFile } = require('../uploadHelper');
 const { logActivity } = require('../lib/activityLogger');
 
 const router = express.Router();
+// Size-limited multer instance for the Photo / Business Card uploads — same
+// reasoning as participants.js/hostmembers.js/speakers.js.
+const uploadImage = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 // --- Duplicate-entry protection --- same idea as host members/delegates:
 // match on phone first (most reliable), falling back to an exact
@@ -76,7 +81,7 @@ router.get('/:id', async (req, res) => {
 });
 
 router.post('/', async (req, res) => {
-  const { name, phone, email, organization, notes, force } = req.body;
+  const { name, phone, email, organization, notes, shirt_size, tshirt_size, force } = req.body;
   if (!name) return res.status(400).json({ error: 'name is required' });
   try {
     if (!force) {
@@ -90,8 +95,8 @@ router.post('/', async (req, res) => {
       }
     }
     const result = await db.run(
-      `INSERT INTO volunteers (name, phone, email, organization, notes) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
-      [name.trim(), phone || '', email || '', organization || '', notes || '']
+      `INSERT INTO volunteers (name, phone, email, organization, notes, shirt_size, tshirt_size) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+      [name.trim(), phone || '', email || '', organization || '', notes || '', shirt_size || null, tshirt_size || null]
     );
     logActivity(req.user, { action: 'create', entityType: 'volunteer', entityId: result.id, label: name.trim() });
     res.json({ id: result.id });
@@ -101,7 +106,7 @@ router.post('/', async (req, res) => {
 });
 
 router.put('/:id', async (req, res) => {
-  const { name, phone, email, organization, notes, force } = req.body;
+  const { name, phone, email, organization, notes, shirt_size, tshirt_size, force } = req.body;
   try {
     if (!force && (name !== undefined || phone !== undefined)) {
       const current = await db.get('SELECT name, phone FROM volunteers WHERE id=$1', [req.params.id]);
@@ -121,6 +126,14 @@ router.put('/:id', async (req, res) => {
       [name || null, phone !== undefined ? phone : null, email !== undefined ? email : null,
         organization !== undefined ? organization : null, notes !== undefined ? notes : null, req.params.id]
     );
+    // Separate statements (not COALESCE'd above) so an explicit "" from a
+    // "— None —" dropdown option actually clears the value.
+    if (shirt_size !== undefined) {
+      await db.run('UPDATE volunteers SET shirt_size=$1 WHERE id=$2', [shirt_size || null, req.params.id]);
+    }
+    if (tshirt_size !== undefined) {
+      await db.run('UPDATE volunteers SET tshirt_size=$1 WHERE id=$2', [tshirt_size || null, req.params.id]);
+    }
     logActivity(req.user, { action: 'update', entityType: 'volunteer', entityId: Number(req.params.id), label: name });
     res.json({ ok: true });
   } catch (e) {
@@ -129,10 +142,86 @@ router.put('/:id', async (req, res) => {
 });
 
 router.delete('/:id', async (req, res) => {
-  const existing = await db.get('SELECT name FROM volunteers WHERE id=$1', [req.params.id]);
+  const existing = await db.get('SELECT name, photo_url, business_card_url FROM volunteers WHERE id=$1', [req.params.id]);
+  if (existing) {
+    await deleteStoredFile(existing.photo_url);
+    await deleteStoredFile(existing.business_card_url);
+  }
   await db.run('DELETE FROM volunteers WHERE id=$1', [req.params.id]);
   logActivity(req.user, { action: 'delete', entityType: 'volunteer', entityId: Number(req.params.id), label: existing?.name });
   res.json({ ok: true });
+});
+
+// Volunteer's own photo — shown on their profile.
+router.post('/:id/photo', (req, res, next) => {
+  uploadImage.single('file')(req, res, (err) => {
+    if (err) {
+      const friendly = err.code === 'LIMIT_FILE_SIZE' ? 'Photo is too large (max 10MB).' : 'Upload was interrupted — please try again.';
+      return res.status(400).json({ error: friendly });
+    }
+    next();
+  });
+}, async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'file is required' });
+  try {
+    const existing = await db.get('SELECT photo_url FROM volunteers WHERE id=$1', [req.params.id]);
+    if (!existing) return res.status(404).json({ error: 'Volunteer not found' });
+    const storedPath = await saveFile(req.file, 'volunteer-photos');
+    await db.run('UPDATE volunteers SET photo_url=$1 WHERE id=$2', [storedPath, req.params.id]);
+    if (existing.photo_url) await deleteStoredFile(existing.photo_url);
+    res.json({ photo_url: storedPath });
+  } catch (e) {
+    console.error('Volunteer photo upload failed —', e.message);
+    res.status(500).json({ error: 'Upload failed: ' + e.message });
+  }
+});
+
+router.delete('/:id/photo', async (req, res) => {
+  try {
+    const existing = await db.get('SELECT photo_url FROM volunteers WHERE id=$1', [req.params.id]);
+    if (!existing) return res.status(404).json({ error: 'Volunteer not found' });
+    await db.run('UPDATE volunteers SET photo_url=NULL WHERE id=$1', [req.params.id]);
+    if (existing.photo_url) await deleteStoredFile(existing.photo_url);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// Photo/scan of the volunteer's business card.
+router.post('/:id/business-card', (req, res, next) => {
+  uploadImage.single('file')(req, res, (err) => {
+    if (err) {
+      const friendly = err.code === 'LIMIT_FILE_SIZE' ? 'Image is too large (max 10MB).' : 'Upload was interrupted — please try again.';
+      return res.status(400).json({ error: friendly });
+    }
+    next();
+  });
+}, async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'file is required' });
+  try {
+    const existing = await db.get('SELECT business_card_url FROM volunteers WHERE id=$1', [req.params.id]);
+    if (!existing) return res.status(404).json({ error: 'Volunteer not found' });
+    const storedPath = await saveFile(req.file, 'volunteer-business-cards');
+    await db.run('UPDATE volunteers SET business_card_url=$1 WHERE id=$2', [storedPath, req.params.id]);
+    if (existing.business_card_url) await deleteStoredFile(existing.business_card_url);
+    res.json({ business_card_url: storedPath });
+  } catch (e) {
+    console.error('Volunteer business card upload failed —', e.message);
+    res.status(500).json({ error: 'Upload failed: ' + e.message });
+  }
+});
+
+router.delete('/:id/business-card', async (req, res) => {
+  try {
+    const existing = await db.get('SELECT business_card_url FROM volunteers WHERE id=$1', [req.params.id]);
+    if (!existing) return res.status(404).json({ error: 'Volunteer not found' });
+    await db.run('UPDATE volunteers SET business_card_url=NULL WHERE id=$1', [req.params.id]);
+    if (existing.business_card_url) await deleteStoredFile(existing.business_card_url);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 
 // Replace the full set of modules granted directly to this volunteer (admin

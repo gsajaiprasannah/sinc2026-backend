@@ -3,17 +3,25 @@ const multer = require('multer');
 const { parse } = require('csv-parse/sync');
 const db = require('../db');
 const { attachChecklistRoutes, deleteChecklistForOwner } = require('./checklistHelper');
+const { saveFile, deleteStoredFile } = require('../uploadHelper');
 const { logActivity } = require('../lib/activityLogger');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
+// Separate, size-limited instance for the Photo / Business Card uploads —
+// same reasoning as speakers.js's own `upload`: the bulk-CSV `upload` above
+// has no size cap (CSVs can legitimately be large), but an image upload
+// should be capped so one bad file can't exhaust memory.
+const uploadImage = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 const FIELDS = [
   'registration_id', 'is_primary', 'name', 'phone', 'whatsapp', 'email', 'address', 'club_id', 'designation',
   'dietary_preference',
   'travel_mode', 'travel_number', 'travel_datetime', 'arrival_point',
   'departure_mode', 'departure_number', 'departure_datetime', 'departure_point',
-  'pickup_by', 'pickup_vehicle', 'pickup_phone', 'spoc_name', 'spoc_phone', 'notes'
+  'pickup_by', 'pickup_vehicle', 'pickup_phone', 'spoc_name', 'spoc_phone', 'notes',
+  // Congress-wide member data collection — see server/db.js comment.
+  'shirt_size', 'tshirt_size'
 ];
 
 // Core identity/registration fields — once a delegate exists, only a super
@@ -243,11 +251,90 @@ router.put('/:id/spoc', async (req, res) => {
 });
 
 router.delete('/:id', async (req, res) => {
-  const existing = await db.get('SELECT name FROM participants WHERE id=$1', [req.params.id]);
+  const existing = await db.get('SELECT name, photo_url, business_card_url FROM participants WHERE id=$1', [req.params.id]);
+  if (existing) {
+    await deleteStoredFile(existing.photo_url);
+    await deleteStoredFile(existing.business_card_url);
+  }
   await deleteChecklistForOwner('participant', req.params.id);
   await db.run('DELETE FROM participants WHERE id=$1', [req.params.id]);
   logActivity(req.user, { action: 'delete', entityType: 'participant', entityId: Number(req.params.id), label: existing?.name });
   res.json({ ok: true });
+});
+
+// Delegate's own photo — shown on their profile. Replaces any existing
+// photo (old file is deleted so storage doesn't leak). Same pattern as
+// speakers.js's speaker photo upload.
+router.post('/:id/photo', (req, res, next) => {
+  uploadImage.single('file')(req, res, (err) => {
+    if (err) {
+      const friendly = err.code === 'LIMIT_FILE_SIZE' ? 'Photo is too large (max 10MB).' : 'Upload was interrupted — please try again.';
+      return res.status(400).json({ error: friendly });
+    }
+    next();
+  });
+}, async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'file is required' });
+  try {
+    const existing = await db.get('SELECT photo_url FROM participants WHERE id=$1', [req.params.id]);
+    if (!existing) return res.status(404).json({ error: 'Delegate not found' });
+    const storedPath = await saveFile(req.file, 'participant-photos');
+    await db.run('UPDATE participants SET photo_url=$1 WHERE id=$2', [storedPath, req.params.id]);
+    if (existing.photo_url) await deleteStoredFile(existing.photo_url);
+    res.json({ photo_url: storedPath });
+  } catch (e) {
+    console.error('Delegate photo upload failed —', e.message);
+    res.status(500).json({ error: 'Upload failed: ' + e.message });
+  }
+});
+
+router.delete('/:id/photo', async (req, res) => {
+  try {
+    const existing = await db.get('SELECT photo_url FROM participants WHERE id=$1', [req.params.id]);
+    if (!existing) return res.status(404).json({ error: 'Delegate not found' });
+    await db.run('UPDATE participants SET photo_url=NULL WHERE id=$1', [req.params.id]);
+    if (existing.photo_url) await deleteStoredFile(existing.photo_url);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// Photo/scan of the delegate's business card — same upload mechanism as
+// their profile photo, stored as a separate field.
+router.post('/:id/business-card', (req, res, next) => {
+  uploadImage.single('file')(req, res, (err) => {
+    if (err) {
+      const friendly = err.code === 'LIMIT_FILE_SIZE' ? 'Image is too large (max 10MB).' : 'Upload was interrupted — please try again.';
+      return res.status(400).json({ error: friendly });
+    }
+    next();
+  });
+}, async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'file is required' });
+  try {
+    const existing = await db.get('SELECT business_card_url FROM participants WHERE id=$1', [req.params.id]);
+    if (!existing) return res.status(404).json({ error: 'Delegate not found' });
+    const storedPath = await saveFile(req.file, 'participant-business-cards');
+    await db.run('UPDATE participants SET business_card_url=$1 WHERE id=$2', [storedPath, req.params.id]);
+    if (existing.business_card_url) await deleteStoredFile(existing.business_card_url);
+    res.json({ business_card_url: storedPath });
+  } catch (e) {
+    console.error('Delegate business card upload failed —', e.message);
+    res.status(500).json({ error: 'Upload failed: ' + e.message });
+  }
+});
+
+router.delete('/:id/business-card', async (req, res) => {
+  try {
+    const existing = await db.get('SELECT business_card_url FROM participants WHERE id=$1', [req.params.id]);
+    if (!existing) return res.status(404).json({ error: 'Delegate not found' });
+    await db.run('UPDATE participants SET business_card_url=NULL WHERE id=$1', [req.params.id]);
+    if (existing.business_card_url) await deleteStoredFile(existing.business_card_url);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 
 // Goodies/kit handover checklist (welcome kit, delegate bag, souvenir, ID
