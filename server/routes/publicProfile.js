@@ -42,8 +42,15 @@ async function findMatches(name, phone) {
   if (!nn || !np) return [];
   const matches = [];
   for (const [type, { table, label }] of Object.entries(TABLES)) {
+    // Travel/address columns only exist on `participants` — the my-travel.html
+    // page (Delegate-only) needs them to prefill its form; host_members/
+    // volunteers don't have these columns so they're left out for those tables.
+    const extraCols = type === 'participant'
+      ? `, address, travel_mode, travel_number, travel_datetime, arrival_point,
+         departure_mode, departure_number, departure_datetime, departure_point`
+      : '';
     const rows = await db.all(`
-      SELECT id, name, shirt_size, tshirt_size, photo_url, business_card_url
+      SELECT id, name, shirt_size, tshirt_size, photo_url, business_card_url${extraCols}
       FROM ${table}
       WHERE lower(trim(name)) = $1
         AND phone <> '' AND RIGHT(regexp_replace(COALESCE(phone,''), '[^0-9]', '', 'g'), 10) = $2
@@ -98,6 +105,52 @@ router.put('/:type/:id', async (req, res) => {
     await db.run(`UPDATE ${verified.table} SET shirt_size=$1, tshirt_size=$2 WHERE id=$3`, [
       shirt_size || null, tshirt_size || null, req.params.id
     ]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// PUT /participant/:id/travel { name, phone, address, travel_mode, travel_number,
+// travel_datetime, arrival_point, departure_mode, departure_number,
+// departure_datetime, departure_point }
+// Delegate-only — kept as its own route (rather than folded into the sizes
+// PUT above) since it only applies to `participants` and touches a
+// completely different set of columns; keeping them separate means a bug in
+// one can't affect the other. Powers the separate my-travel.html page.
+const TRAVEL_MODES = ['flight', 'train', 'road', 'other'];
+function cleanMode(v) { return TRAVEL_MODES.includes(v) ? v : null; }
+function cleanText(v) { return (v === undefined || v === null || String(v).trim() === '') ? null : String(v).trim(); }
+
+// Same-spirit as admin.js's ensureTransportPoint — auto-registers any new
+// arrival/departure point a delegate types so it shows up as a suggestion in
+// the admin's Transport Planning UI too. Direct SQL rather than calling the
+// admin-only /api/transport-points route (which requires a JWT).
+async function ensurePoint(name) {
+  const trimmed = (name || '').trim();
+  if (!trimmed) return;
+  await db.run(
+    `INSERT INTO transport_points (name) VALUES ($1) ON CONFLICT (LOWER(name)) DO NOTHING`,
+    [trimmed]
+  );
+}
+
+router.put('/participant/:id/travel', async (req, res) => {
+  try {
+    const verified = await verifyOwnership('participant', req.params.id, req.body.name, req.body.phone);
+    if (!verified) return res.status(403).json({ error: 'Name and phone number did not match our records — please look yourself up again.' });
+    const b = req.body;
+    await db.run(`
+      UPDATE participants SET
+        address=$1, travel_mode=$2, travel_number=$3, travel_datetime=$4, arrival_point=$5,
+        departure_mode=$6, departure_number=$7, departure_datetime=$8, departure_point=$9
+      WHERE id=$10
+    `, [
+      cleanText(b.address), cleanMode(b.travel_mode), cleanText(b.travel_number), cleanText(b.travel_datetime), cleanText(b.arrival_point),
+      cleanMode(b.departure_mode), cleanText(b.departure_number), cleanText(b.departure_datetime), cleanText(b.departure_point),
+      req.params.id
+    ]);
+    await Promise.all([ensurePoint(b.arrival_point), ensurePoint(b.departure_point)]);
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
