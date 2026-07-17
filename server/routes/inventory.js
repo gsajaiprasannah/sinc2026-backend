@@ -182,6 +182,30 @@ router.get('/merchandise-requirement', async (req, res) => {
   }
 });
 
+// Per-person breakdown of exactly who has which Shirt/T-Shirt size on file —
+// the answer to "who chose what size", so whoever's packing/handing out
+// merchandise doesn't have to cross-reference the full Delegates/Host
+// Members lists every time. Only rows with at least one size filled in are
+// returned (matches the "sizesOnFile" counts on /merchandise-requirement).
+router.get('/merchandise-size-list', async (req, res) => {
+  try {
+    const rows = await db.all(`
+      SELECT 'Delegate' AS type, p.name, p.phone, c.name AS club_or_company, p.shirt_size, p.tshirt_size
+      FROM participants p
+      LEFT JOIN clubs c ON c.id = p.club_id
+      WHERE (p.shirt_size IS NOT NULL AND p.shirt_size <> '') OR (p.tshirt_size IS NOT NULL AND p.tshirt_size <> '')
+      UNION ALL
+      SELECT 'Host Member' AS type, h.name, h.phone, h.company AS club_or_company, h.shirt_size, h.tshirt_size
+      FROM host_members h
+      WHERE (h.shirt_size IS NOT NULL AND h.shirt_size <> '') OR (h.tshirt_size IS NOT NULL AND h.tshirt_size <> '')
+      ORDER BY type, name
+    `);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // --- Requirements: procurement asks that flow through to a real Finance
 // Purchase Request. Distinct from inventory_items (the stock list) — a
 // requirement doesn't track stock of its own, it's just something someone
