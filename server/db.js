@@ -752,14 +752,17 @@ async function initSchema() {
   // URL, or a relative /uploads/... path) via uploadHelper.saveFile.
   await pool.query(`ALTER TABLE participants ADD COLUMN IF NOT EXISTS shirt_size TEXT;`);
   await pool.query(`ALTER TABLE participants ADD COLUMN IF NOT EXISTS tshirt_size TEXT;`);
+  await pool.query(`ALTER TABLE participants ADD COLUMN IF NOT EXISTS waist_size TEXT;`);
   await pool.query(`ALTER TABLE participants ADD COLUMN IF NOT EXISTS photo_url TEXT;`);
   await pool.query(`ALTER TABLE participants ADD COLUMN IF NOT EXISTS business_card_url TEXT;`);
   await pool.query(`ALTER TABLE host_members ADD COLUMN IF NOT EXISTS shirt_size TEXT;`);
   await pool.query(`ALTER TABLE host_members ADD COLUMN IF NOT EXISTS tshirt_size TEXT;`);
+  await pool.query(`ALTER TABLE host_members ADD COLUMN IF NOT EXISTS waist_size TEXT;`);
   await pool.query(`ALTER TABLE host_members ADD COLUMN IF NOT EXISTS photo_url TEXT;`);
   await pool.query(`ALTER TABLE host_members ADD COLUMN IF NOT EXISTS business_card_url TEXT;`);
   await pool.query(`ALTER TABLE volunteers ADD COLUMN IF NOT EXISTS shirt_size TEXT;`);
   await pool.query(`ALTER TABLE volunteers ADD COLUMN IF NOT EXISTS tshirt_size TEXT;`);
+  await pool.query(`ALTER TABLE volunteers ADD COLUMN IF NOT EXISTS waist_size TEXT;`);
   await pool.query(`ALTER TABLE volunteers ADD COLUMN IF NOT EXISTS photo_url TEXT;`);
   await pool.query(`ALTER TABLE volunteers ADD COLUMN IF NOT EXISTS business_card_url TEXT;`);
 
