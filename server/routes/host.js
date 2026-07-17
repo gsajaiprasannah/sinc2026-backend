@@ -268,10 +268,10 @@ router.get('/me', requireHostMember, async (req, res) => {
 // needing an admin to do it (or the public/my-profile.html link, for those
 // who'd rather not log in at all).
 router.put('/me/sizes', requireHostMember, async (req, res) => {
-  const { shirt_size, tshirt_size } = req.body;
+  const { shirt_size, tshirt_size, waist_size } = req.body;
   try {
-    await db.run('UPDATE host_members SET shirt_size=$1, tshirt_size=$2 WHERE id=$3', [
-      shirt_size || null, tshirt_size || null, req.hostMemberId
+    await db.run('UPDATE host_members SET shirt_size=$1, tshirt_size=$2, waist_size=$3 WHERE id=$4', [
+      shirt_size || null, tshirt_size || null, waist_size || null, req.hostMemberId
     ]);
     res.json({ ok: true });
   } catch (e) {

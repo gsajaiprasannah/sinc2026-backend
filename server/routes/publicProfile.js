@@ -50,7 +50,7 @@ async function findMatches(name, phone) {
          departure_mode, departure_number, departure_datetime, departure_point`
       : '';
     const rows = await db.all(`
-      SELECT id, name, shirt_size, tshirt_size, photo_url, business_card_url${extraCols}
+      SELECT id, name, shirt_size, tshirt_size, waist_size, photo_url, business_card_url${extraCols}
       FROM ${table}
       WHERE lower(trim(name)) = $1
         AND phone <> '' AND RIGHT(regexp_replace(COALESCE(phone,''), '[^0-9]', '', 'g'), 10) = $2
@@ -96,14 +96,14 @@ async function verifyOwnership(type, id, name, phone) {
   return { ...entry, row };
 }
 
-// PUT /:type/:id { name, phone, shirt_size, tshirt_size }
+// PUT /:type/:id { name, phone, shirt_size, tshirt_size, waist_size }
 router.put('/:type/:id', async (req, res) => {
-  const { name, phone, shirt_size, tshirt_size } = req.body;
+  const { name, phone, shirt_size, tshirt_size, waist_size } = req.body;
   try {
     const verified = await verifyOwnership(req.params.type, req.params.id, name, phone);
     if (!verified) return res.status(403).json({ error: 'Name and phone number did not match our records — please look yourself up again.' });
-    await db.run(`UPDATE ${verified.table} SET shirt_size=$1, tshirt_size=$2 WHERE id=$3`, [
-      shirt_size || null, tshirt_size || null, req.params.id
+    await db.run(`UPDATE ${verified.table} SET shirt_size=$1, tshirt_size=$2, waist_size=$3 WHERE id=$4`, [
+      shirt_size || null, tshirt_size || null, waist_size || null, req.params.id
     ]);
     res.json({ ok: true });
   } catch (e) {
@@ -113,11 +113,13 @@ router.put('/:type/:id', async (req, res) => {
 
 // PUT /participant/:id/travel { name, phone, address, travel_mode, travel_number,
 // travel_datetime, arrival_point, departure_mode, departure_number,
-// departure_datetime, departure_point }
-// Delegate-only — kept as its own route (rather than folded into the sizes
-// PUT above) since it only applies to `participants` and touches a
-// completely different set of columns; keeping them separate means a bug in
-// one can't affect the other. Powers the separate my-travel.html page.
+// departure_datetime, departure_point, shirt_size, tshirt_size, waist_size }
+// Delegate-only. Also accepts shirt_size/tshirt_size (same columns the
+// generic sizes PUT above writes) so my-travel.html can be a one-stop page
+// for Delegates — address, travel, merch size, photo and business card all
+// save together from a single "Save changes" button. Photo/business card
+// still go through the existing /:type/:id/photo and /:type/:id/business-card
+// routes below (unchanged, already generic across all three roles).
 const TRAVEL_MODES = ['flight', 'train', 'road', 'other'];
 function cleanMode(v) { return TRAVEL_MODES.includes(v) ? v : null; }
 function cleanText(v) { return (v === undefined || v === null || String(v).trim() === '') ? null : String(v).trim(); }
@@ -143,11 +145,13 @@ router.put('/participant/:id/travel', async (req, res) => {
     await db.run(`
       UPDATE participants SET
         address=$1, travel_mode=$2, travel_number=$3, travel_datetime=$4, arrival_point=$5,
-        departure_mode=$6, departure_number=$7, departure_datetime=$8, departure_point=$9
-      WHERE id=$10
+        departure_mode=$6, departure_number=$7, departure_datetime=$8, departure_point=$9,
+        shirt_size=$10, tshirt_size=$11, waist_size=$12
+      WHERE id=$13
     `, [
       cleanText(b.address), cleanMode(b.travel_mode), cleanText(b.travel_number), cleanText(b.travel_datetime), cleanText(b.arrival_point),
       cleanMode(b.departure_mode), cleanText(b.departure_number), cleanText(b.departure_datetime), cleanText(b.departure_point),
+      cleanText(b.shirt_size), cleanText(b.tshirt_size), cleanText(b.waist_size),
       req.params.id
     ]);
     await Promise.all([ensurePoint(b.arrival_point), ensurePoint(b.departure_point)]);

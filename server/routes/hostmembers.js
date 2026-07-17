@@ -77,7 +77,7 @@ router.get('/:id', async (req, res) => {
 });
 
 router.post('/', async (req, res) => {
-  const { name, email, phone, company, designation, category, payment_status, payment_amount, payment_date, payment_mode, notes, leadership_role, shirt_size, tshirt_size, force } = req.body;
+  const { name, email, phone, company, designation, category, payment_status, payment_amount, payment_date, payment_mode, notes, leadership_role, shirt_size, tshirt_size, waist_size, force } = req.body;
   if (!name) return res.status(400).json({ error: 'name is required' });
   try {
     if (!force) {
@@ -91,11 +91,11 @@ router.post('/', async (req, res) => {
       }
     }
     const result = await db.run(`
-      INSERT INTO host_members (name, email, phone, company, designation, category, payment_status, payment_amount, payment_date, payment_mode, notes, leadership_role, shirt_size, tshirt_size)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id
+      INSERT INTO host_members (name, email, phone, company, designation, category, payment_status, payment_amount, payment_date, payment_mode, notes, leadership_role, shirt_size, tshirt_size, waist_size)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id
     `, [name, email || '', phone || '', company || '', designation || '', category || '',
         payment_status || 'pending', Number(payment_amount) || 5000, payment_date || null, payment_mode || '', notes || '', leadership_role || null,
-        shirt_size || null, tshirt_size || null]);
+        shirt_size || null, tshirt_size || null, waist_size || null]);
     logActivity(req.user, { action: 'create', entityType: 'host_member', entityId: result.id, label: name });
     res.json({ id: result.id });
   } catch (e) {
@@ -104,7 +104,7 @@ router.post('/', async (req, res) => {
 });
 
 router.put('/:id', async (req, res) => {
-  const { name, email, phone, company, designation, category, payment_status, payment_amount, payment_date, payment_mode, notes, leadership_role, shirt_size, tshirt_size, force } = req.body;
+  const { name, email, phone, company, designation, category, payment_status, payment_amount, payment_date, payment_mode, notes, leadership_role, shirt_size, tshirt_size, waist_size, force } = req.body;
   try {
     if (!force && (name !== undefined || phone !== undefined)) {
       const current = await db.get('SELECT name, phone FROM host_members WHERE id=$1', [req.params.id]);
@@ -143,6 +143,9 @@ router.put('/:id', async (req, res) => {
     }
     if (tshirt_size !== undefined) {
       await db.run('UPDATE host_members SET tshirt_size=$1 WHERE id=$2', [tshirt_size || null, req.params.id]);
+    }
+    if (waist_size !== undefined) {
+      await db.run('UPDATE host_members SET waist_size=$1 WHERE id=$2', [waist_size || null, req.params.id]);
     }
     logActivity(req.user, { action: 'update', entityType: 'host_member', entityId: Number(req.params.id), label: name });
     res.json({ ok: true });

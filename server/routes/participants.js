@@ -21,7 +21,7 @@ const FIELDS = [
   'departure_mode', 'departure_number', 'departure_datetime', 'departure_point',
   'pickup_by', 'pickup_vehicle', 'pickup_phone', 'spoc_name', 'spoc_phone', 'notes',
   // Congress-wide member data collection — see server/db.js comment.
-  'shirt_size', 'tshirt_size'
+  'shirt_size', 'tshirt_size', 'waist_size'
 ];
 
 // Core identity/registration fields — once a delegate exists, only a super

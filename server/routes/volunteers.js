@@ -81,7 +81,7 @@ router.get('/:id', async (req, res) => {
 });
 
 router.post('/', async (req, res) => {
-  const { name, phone, email, organization, notes, shirt_size, tshirt_size, force } = req.body;
+  const { name, phone, email, organization, notes, shirt_size, tshirt_size, waist_size, force } = req.body;
   if (!name) return res.status(400).json({ error: 'name is required' });
   try {
     if (!force) {
@@ -95,8 +95,8 @@ router.post('/', async (req, res) => {
       }
     }
     const result = await db.run(
-      `INSERT INTO volunteers (name, phone, email, organization, notes, shirt_size, tshirt_size) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
-      [name.trim(), phone || '', email || '', organization || '', notes || '', shirt_size || null, tshirt_size || null]
+      `INSERT INTO volunteers (name, phone, email, organization, notes, shirt_size, tshirt_size, waist_size) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+      [name.trim(), phone || '', email || '', organization || '', notes || '', shirt_size || null, tshirt_size || null, waist_size || null]
     );
     logActivity(req.user, { action: 'create', entityType: 'volunteer', entityId: result.id, label: name.trim() });
     res.json({ id: result.id });
@@ -106,7 +106,7 @@ router.post('/', async (req, res) => {
 });
 
 router.put('/:id', async (req, res) => {
-  const { name, phone, email, organization, notes, shirt_size, tshirt_size, force } = req.body;
+  const { name, phone, email, organization, notes, shirt_size, tshirt_size, waist_size, force } = req.body;
   try {
     if (!force && (name !== undefined || phone !== undefined)) {
       const current = await db.get('SELECT name, phone FROM volunteers WHERE id=$1', [req.params.id]);
@@ -133,6 +133,9 @@ router.put('/:id', async (req, res) => {
     }
     if (tshirt_size !== undefined) {
       await db.run('UPDATE volunteers SET tshirt_size=$1 WHERE id=$2', [tshirt_size || null, req.params.id]);
+    }
+    if (waist_size !== undefined) {
+      await db.run('UPDATE volunteers SET waist_size=$1 WHERE id=$2', [waist_size || null, req.params.id]);
     }
     logActivity(req.user, { action: 'update', entityType: 'volunteer', entityId: Number(req.params.id), label: name });
     res.json({ ok: true });
