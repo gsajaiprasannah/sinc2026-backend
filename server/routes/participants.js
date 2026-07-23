@@ -51,6 +51,47 @@ function normEmail(e) {
   return (e || '').trim().toLowerCase();
 }
 
+// --- Primary registrant / co-registrant guardrails ---
+// registration_id + is_primary already exist on `participants` (a 'double'
+// registration is just two rows sharing one registration_id, one of them
+// is_primary=1). This helper enforces the two rules that keep that pairing
+// meaningful instead of just two unlinked rows that happen to share a
+// registration: (1) a registration can't hold more delegates than its
+// reg_type allows (1 for single/congress_only, 2 for double), and (2) a
+// registration can't have two primary registrants at once. Both are hard
+// blocks (no `force` override) since — unlike the "possibly the same
+// person" duplicate check below — there's no legitimate reason to violate
+// either rule; the fix is always to pick a different registration or edit
+// the existing delegate instead.
+const REG_TYPE_LABEL_SERVER = { single: 'Single', double: 'Double', congress_only: 'Congress Only' };
+async function checkRegistrationCapacity(runner, registrationId, isPrimary, excludeId) {
+  if (!registrationId) return null;
+  const reg = await runner.get('SELECT reg_number, reg_type FROM registrations WHERE id=$1', [registrationId]);
+  if (!reg) return null; // an invalid id is left for the FK constraint to reject
+  const maxAllowed = reg.reg_type === 'double' ? 2 : 1;
+  let sql = 'SELECT id, name, is_primary FROM participants WHERE registration_id=$1';
+  const params = [registrationId];
+  if (excludeId) {
+    sql += ' AND id<>$2';
+    params.push(excludeId);
+  }
+  const existing = await runner.all(sql, params);
+  const typeLabel = REG_TYPE_LABEL_SERVER[reg.reg_type] || reg.reg_type;
+  if (existing.length >= maxAllowed) {
+    return `Registration ${reg.reg_number} is a ${typeLabel} registration and already has ${existing.length}/${maxAllowed} delegate(s) linked. Use a different registration, or edit one of the existing delegates instead.`;
+  }
+  const wantsPrimary = isPrimary === undefined || isPrimary === null || isPrimary === ''
+    ? true // matches the DB column default and the form's default selection
+    : (isPrimary === '1' || isPrimary === 1 || isPrimary === true);
+  if (wantsPrimary) {
+    const existingPrimary = existing.find((p) => Number(p.is_primary) === 1);
+    if (existingPrimary) {
+      return `Registration ${reg.reg_number} already has a primary registrant (${existingPrimary.name}). Save this delegate as a co-registrant instead.`;
+    }
+  }
+  return null;
+}
+
 async function findDuplicate(runner, { name, phone, email, excludeId }) {
   const nn = normName(name);
   if (!nn) return null;
@@ -157,6 +198,10 @@ router.post('/', async (req, res) => {
   const body = req.body;
   if (!body.name) return res.status(400).json({ error: 'name is required' });
   try {
+    if (body.registration_id) {
+      const capacityError = await checkRegistrationCapacity(db, body.registration_id, body.is_primary);
+      if (capacityError) return res.status(409).json({ error: capacityError });
+    }
     if (!body.force) {
       const dup = await findDuplicate(db, { name: body.name, phone: body.phone, email: body.email });
       if (dup) {
@@ -195,6 +240,17 @@ router.put('/:id', async (req, res) => {
         return res.status(403).json({
           error: `Only a super admin can change ${changedFrozen.join(', ')} for an existing delegate.`
         });
+      }
+    }
+    if (body.registration_id !== undefined || body.is_primary !== undefined) {
+      const currentReg = await db.get('SELECT registration_id, is_primary FROM participants WHERE id=$1', [req.params.id]);
+      if (currentReg) {
+        const targetRegId = body.registration_id !== undefined ? body.registration_id : currentReg.registration_id;
+        const targetIsPrimary = body.is_primary !== undefined ? body.is_primary : currentReg.is_primary;
+        if (targetRegId) {
+          const capacityError = await checkRegistrationCapacity(db, targetRegId, targetIsPrimary, req.params.id);
+          if (capacityError) return res.status(409).json({ error: capacityError });
+        }
       }
     }
     if (!body.force && (body.name !== undefined || body.phone !== undefined || body.email !== undefined)) {

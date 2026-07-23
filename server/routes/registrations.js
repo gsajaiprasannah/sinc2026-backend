@@ -22,9 +22,20 @@ async function computeNextRegNumber(runner) {
 
 router.get('/', async (req, res) => {
   try {
+    // `participants` is included (not just the count) so the admin UI can
+    // show, right in the Registration dropdown, who's already linked to a
+    // registration and whether a primary registrant is already set — the
+    // "who's the primary, who's the co-registrant" tracking the congress
+    // team asked for. reg_type already caps this at 1 (single/congress_only)
+    // or 2 (double) participants.
     const rows = await db.all(`
       SELECT r.*, c.name AS club_name,
-        (SELECT COUNT(*) FROM participants p WHERE p.registration_id = r.id) AS participant_count
+        (SELECT COUNT(*) FROM participants p WHERE p.registration_id = r.id) AS participant_count,
+        COALESCE(
+          (SELECT json_agg(json_build_object('id', p.id, 'name', p.name, 'is_primary', p.is_primary) ORDER BY p.is_primary DESC, p.id)
+           FROM participants p WHERE p.registration_id = r.id),
+          '[]'::json
+        ) AS participants
       FROM registrations r LEFT JOIN clubs c ON c.id = r.club_id
       ORDER BY r.created_at DESC
     `);
