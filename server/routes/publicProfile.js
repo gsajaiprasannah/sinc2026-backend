@@ -52,7 +52,7 @@ async function findMatches(name, phone) {
          (SELECT ptp.pre_tour_id FROM pre_tour_participants ptp WHERE ptp.participant_id = ${table}.id ORDER BY ptp.id LIMIT 1) AS pre_tour_id`
       : '';
     const rows = await db.all(`
-      SELECT id, name, shirt_size, tshirt_size, waist_size, photo_url, business_card_url${extraCols}
+      SELECT id, name, email, shirt_size, tshirt_size, waist_size, photo_url, business_card_url${extraCols}
       FROM ${table}
       WHERE lower(trim(name)) = $1
         AND phone <> '' AND RIGHT(regexp_replace(COALESCE(phone,''), '[^0-9]', '', 'g'), 10) = $2
@@ -98,14 +98,19 @@ async function verifyOwnership(type, id, name, phone) {
   return { ...entry, row };
 }
 
-// PUT /:type/:id { name, phone, shirt_size, tshirt_size, waist_size }
+// PUT /:type/:id { name, phone, email, shirt_size, tshirt_size, waist_size }
+// email was added alongside the congress-wide fields above so Host Members
+// and Volunteers can supply/correct their own email address from
+// my-profile.html — the address the Email Campaigns admin feature then sends
+// to (see server/routes/emailCampaigns.js). Left optional/nullable, same as
+// every other field here — an admin can still fill it in manually instead.
 router.put('/:type/:id', async (req, res) => {
-  const { name, phone, shirt_size, tshirt_size, waist_size } = req.body;
+  const { name, phone, email, shirt_size, tshirt_size, waist_size } = req.body;
   try {
     const verified = await verifyOwnership(req.params.type, req.params.id, name, phone);
     if (!verified) return res.status(403).json({ error: 'Name and phone number did not match our records — please look yourself up again.' });
-    await db.run(`UPDATE ${verified.table} SET shirt_size=$1, tshirt_size=$2, waist_size=$3 WHERE id=$4`, [
-      shirt_size || null, tshirt_size || null, waist_size || null, req.params.id
+    await db.run(`UPDATE ${verified.table} SET email=$1, shirt_size=$2, tshirt_size=$3, waist_size=$4 WHERE id=$5`, [
+      cleanText(email), shirt_size || null, tshirt_size || null, waist_size || null, req.params.id
     ]);
     res.json({ ok: true });
   } catch (e) {
@@ -146,12 +151,14 @@ router.put('/participant/:id/travel', async (req, res) => {
     const b = req.body;
     await db.run(`
       UPDATE participants SET
-        address=$1, travel_mode=$2, travel_number=$3, travel_datetime=$4, arrival_point=$5,
-        departure_mode=$6, departure_number=$7, departure_datetime=$8, departure_point=$9,
-        shirt_size=$10, tshirt_size=$11, waist_size=$12,
-        dietary_preference=$13, drink_preference=$14, special_requests=$15, business_profile=$16
-      WHERE id=$17
+        email=$1,
+        address=$2, travel_mode=$3, travel_number=$4, travel_datetime=$5, arrival_point=$6,
+        departure_mode=$7, departure_number=$8, departure_datetime=$9, departure_point=$10,
+        shirt_size=$11, tshirt_size=$12, waist_size=$13,
+        dietary_preference=$14, drink_preference=$15, special_requests=$16, business_profile=$17
+      WHERE id=$18
     `, [
+      cleanText(b.email),
       cleanText(b.address), cleanMode(b.travel_mode), cleanText(b.travel_number), cleanText(b.travel_datetime), cleanText(b.arrival_point),
       cleanMode(b.departure_mode), cleanText(b.departure_number), cleanText(b.departure_datetime), cleanText(b.departure_point),
       cleanText(b.shirt_size), cleanText(b.tshirt_size), cleanText(b.waist_size),
