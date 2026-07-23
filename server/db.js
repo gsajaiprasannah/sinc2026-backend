@@ -663,6 +663,11 @@ async function initSchema() {
   // tour" admin view as one entered manually.
   await pool.query(`ALTER TABLE participants ADD COLUMN IF NOT EXISTS drink_preference TEXT;`);
   await pool.query(`ALTER TABLE participants ADD COLUMN IF NOT EXISTS special_requests TEXT;`);
+  // Which industry/business a delegate is in — Skål International is a
+  // tourism-industry membership org, so this classifies the delegate's own
+  // professional background (Hotelier, Travel Business, Vendor, Institution,
+  // Others). Same self-fill/admin-parity treatment as the fields above.
+  await pool.query(`ALTER TABLE participants ADD COLUMN IF NOT EXISTS business_profile TEXT;`);
 
   // --- Per-participant Registration ID (e.g. SINC2026-0001) ---
   // One code per participant row, assigned automatically on insert via a DB
