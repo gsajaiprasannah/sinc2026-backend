@@ -48,7 +48,7 @@ async function findMatches(name, phone) {
     const extraCols = type === 'participant'
       ? `, address, travel_mode, travel_number, travel_datetime, arrival_point,
          departure_mode, departure_number, departure_datetime, departure_point,
-         dietary_preference, drink_preference, special_requests,
+         dietary_preference, drink_preference, special_requests, business_profile,
          (SELECT ptp.pre_tour_id FROM pre_tour_participants ptp WHERE ptp.participant_id = ${table}.id ORDER BY ptp.id LIMIT 1) AS pre_tour_id`
       : '';
     const rows = await db.all(`
@@ -149,13 +149,13 @@ router.put('/participant/:id/travel', async (req, res) => {
         address=$1, travel_mode=$2, travel_number=$3, travel_datetime=$4, arrival_point=$5,
         departure_mode=$6, departure_number=$7, departure_datetime=$8, departure_point=$9,
         shirt_size=$10, tshirt_size=$11, waist_size=$12,
-        dietary_preference=$13, drink_preference=$14, special_requests=$15
-      WHERE id=$16
+        dietary_preference=$13, drink_preference=$14, special_requests=$15, business_profile=$16
+      WHERE id=$17
     `, [
       cleanText(b.address), cleanMode(b.travel_mode), cleanText(b.travel_number), cleanText(b.travel_datetime), cleanText(b.arrival_point),
       cleanMode(b.departure_mode), cleanText(b.departure_number), cleanText(b.departure_datetime), cleanText(b.departure_point),
       cleanText(b.shirt_size), cleanText(b.tshirt_size), cleanText(b.waist_size),
-      cleanText(b.dietary_preference), cleanText(b.drink_preference), cleanText(b.special_requests),
+      cleanText(b.dietary_preference), cleanText(b.drink_preference), cleanText(b.special_requests), cleanText(b.business_profile),
       req.params.id
     ]);
     await Promise.all([ensurePoint(b.arrival_point), ensurePoint(b.departure_point)]);

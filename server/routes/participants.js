@@ -16,7 +16,7 @@ const uploadImage = multer({ storage: multer.memoryStorage(), limits: { fileSize
 
 const FIELDS = [
   'registration_id', 'is_primary', 'name', 'phone', 'whatsapp', 'email', 'address', 'club_id', 'designation',
-  'dietary_preference', 'drink_preference', 'special_requests',
+  'dietary_preference', 'drink_preference', 'special_requests', 'business_profile',
   'travel_mode', 'travel_number', 'travel_datetime', 'arrival_point',
   'departure_mode', 'departure_number', 'departure_datetime', 'departure_point',
   'pickup_by', 'pickup_vehicle', 'pickup_phone', 'spoc_name', 'spoc_phone', 'notes',
@@ -465,11 +465,11 @@ router.post('/bulk-upload', upload.single('file'), async (req, res) => {
         await tx.run(`
           INSERT INTO participants
             (registration_id, is_primary, name, phone, whatsapp, email, address, club_id, designation, dietary_preference,
-             drink_preference, special_requests,
+             drink_preference, special_requests, business_profile,
              travel_mode, travel_number, travel_datetime, arrival_point,
              departure_mode, departure_number, departure_datetime, departure_point,
              pickup_by, pickup_vehicle, pickup_phone, spoc_name, spoc_phone, notes)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)
         `, [
           reg ? reg.id : null,
           r.is_primary !== undefined ? Number(r.is_primary) : 1,
@@ -483,6 +483,7 @@ router.post('/bulk-upload', upload.single('file'), async (req, res) => {
           r.dietary_preference || null,
           r.drink_preference || null,
           r.special_requests || '',
+          r.business_profile || null,
           r.travel_mode || null,
           r.travel_number || '',
           r.travel_datetime || '',
