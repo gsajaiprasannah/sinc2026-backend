@@ -1434,6 +1434,64 @@ async function initSchema() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS email_campaign_recipients_campaign_idx ON email_campaign_recipients(campaign_id);`);
+
+  // --- QR Badges: one scannable QR per Delegate/Host Member, encoding a
+  // random opaque badge_token (never the raw sequential id) so a lost/photographed
+  // badge can't be used to enumerate everyone else's contact details just by
+  // walking the id up or down. The same token/URL serves three audiences from
+  // one adaptive page (public/badge.html):
+  //   - anyone (no login): a vCard-style contact card (name/phone/email/org)
+  //     with a "Save to Contacts" button — see server/routes/badge.js public route.
+  //   - logged-in staff (Transport/Pre-Tours/gate): the same link additionally
+  //     shows room + vehicle assignment + payment status + a Mark Attendance
+  //     button — see the staff route in the same file.
+  // Backfilled below for any rows created before this migration ran.
+  await pool.query(`ALTER TABLE participants ADD COLUMN IF NOT EXISTS badge_token TEXT;`);
+  await pool.query(`ALTER TABLE host_members ADD COLUMN IF NOT EXISTS badge_token TEXT;`);
+  // Same "generate on insert if missing" trigger pattern as participant_code
+  // above, so every future row (single insert, CSV import, etc.) gets a
+  // token automatically without every call site needing to remember to set one.
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION set_badge_token() RETURNS TRIGGER AS $$
+    BEGIN
+      IF NEW.badge_token IS NULL THEN
+        NEW.badge_token := substr(md5(random()::text || clock_timestamp()::text || COALESCE(NEW.id::text, '')), 1, 20);
+      END IF;
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+  `);
+  await pool.query(`DROP TRIGGER IF EXISTS trg_set_badge_token_participants ON participants;`);
+  await pool.query(`
+    CREATE TRIGGER trg_set_badge_token_participants BEFORE INSERT ON participants
+    FOR EACH ROW EXECUTE FUNCTION set_badge_token();
+  `);
+  await pool.query(`DROP TRIGGER IF EXISTS trg_set_badge_token_host_members ON host_members;`);
+  await pool.query(`
+    CREATE TRIGGER trg_set_badge_token_host_members BEFORE INSERT ON host_members
+    FOR EACH ROW EXECUTE FUNCTION set_badge_token();
+  `);
+  // Backfill existing rows (created before this migration ran).
+  await pool.query(`UPDATE participants SET badge_token = substr(md5(random()::text || clock_timestamp()::text || id::text), 1, 20) WHERE badge_token IS NULL;`);
+  await pool.query(`UPDATE host_members SET badge_token = substr(md5(random()::text || clock_timestamp()::text || id::text), 1, 20) WHERE badge_token IS NULL;`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS participants_badge_token_uidx ON participants(badge_token) WHERE badge_token IS NOT NULL;`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS host_members_badge_token_uidx ON host_members(badge_token) WHERE badge_token IS NOT NULL;`);
+
+  // One row per "Mark Attendance" scan at the entrance/gate. No uniqueness
+  // constraint — a person can be scanned in more than once (e.g. re-entry
+  // after stepping out) and every scan is kept as a full attendance trail;
+  // the staff badge view just shows the most recent one as "checked in at ...".
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS attendance_log (
+      id SERIAL PRIMARY KEY,
+      entity_type TEXT NOT NULL CHECK (entity_type IN ('participant','host_member')),
+      entity_id INTEGER NOT NULL,
+      checked_in_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      checked_in_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS attendance_log_entity_idx ON attendance_log(entity_type, entity_id);`);
 }
 
 module.exports = { pool, all, get, run, transaction, initSchema };

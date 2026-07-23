@@ -63,6 +63,13 @@ app.use('/api/email-campaigns', requireAdminRole, require('./routes/emailCampaig
 // calls with "Login required.", defeating the whole point of a no-login page.
 app.use('/api/public-profile', require('./routes/publicProfile'));
 
+// Public, no-login QR badge lookup — the "anyone scans it, gets a digital
+// visiting card" half of the badge feature (see server/routes/badge.js file
+// header). Mounted early/unwrapped for the same reason as publicProfile
+// above: it must run before the global mutating-methods auth gate further
+// down, and it's a GET anyway so there's nothing to protect from that gate.
+app.use('/api/badge', require('./routes/badge').publicRouter);
+
 // --- Only a super admin may delete anything, across every resource (clubs, ---
 // --- registrations, participants, media, happenings, logins). A regular   ---
 // --- admin can still create/edit records, just not permanently remove     ---
@@ -83,6 +90,10 @@ app.use('/api', (req, res, next) => {
 app.use('/api/participants', requireAdminRole, require('./routes/participants'));
 app.use('/api/registrations', requireAdminRole, require('./routes/registrations'));
 app.use('/api/export', requireAdminRole, require('./routes/export'));
+// Staff-only half of the QR badge feature (room/vehicle/payment details +
+// Mark Attendance) — same protection level as participants/registrations
+// above, since it surfaces the same class of internal data.
+app.use('/api/badge', requireAdminRole, require('./routes/badge').staffRouter);
 
 // --- Host club module — host member directory, committees, delegate ---
 // --- assistance assignments, and their checklist/milestones. All internal ---
