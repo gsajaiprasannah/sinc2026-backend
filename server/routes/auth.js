@@ -184,6 +184,62 @@ router.post('/users/bulk-create-host-logins', requireSuperAdmin, async (req, res
   }
 });
 
+// One-click "make pass123 true for everyone": creates a login for any host
+// member who still doesn't have one (same as bulk-create-host-logins above)
+// AND resets every EXISTING host-member login's password to the same
+// default — including anyone who already changed theirs. This exists
+// specifically so a credentials newsletter can promise "your password is
+// pass123" and have that be true for the entire audience at send time, not
+// just for the members who never logged in yet. Deliberately blunt: it does
+// not ask who to skip, so use it right before a credentials blast, not as a
+// routine maintenance action.
+router.post('/users/bulk-reset-host-passwords', requireSuperAdmin, async (req, res) => {
+  const DEFAULT_PASSWORD = 'pass123';
+  try {
+    const members = await db.all(`
+      SELECT hm.id, hm.name, hm.phone,
+        (SELECT u.id FROM users u WHERE u.host_member_id = hm.id LIMIT 1) AS existing_user_id
+      FROM host_members hm
+      ORDER BY hm.name
+    `);
+    const hash = await hashPassword(DEFAULT_PASSWORD);
+    const created = [];
+    const reset = [];
+    const skipped = [];
+    for (const m of members) {
+      if (m.existing_user_id) {
+        await db.run('UPDATE users SET password_hash=$1 WHERE id=$2', [hash, m.existing_user_id]);
+        reset.push({ name: m.name });
+        continue;
+      }
+      const digits = (m.phone || '').replace(/\D/g, '').slice(-10);
+      if (digits.length !== 10) { skipped.push({ name: m.name, reason: 'no valid 10-digit mobile number on file' }); continue; }
+      const existingUsername = await db.get('SELECT id FROM users WHERE username=$1', [digits]);
+      if (existingUsername) { skipped.push({ name: m.name, reason: `username ${digits} is already taken by another login` }); continue; }
+      try {
+        await db.run(
+          `INSERT INTO users (username, password_hash, role, status, approved_at, approved_by, host_member_id)
+           VALUES ($1,$2,'host_member','approved',NOW(),$3,$4)`,
+          [digits, hash, req.user.id, m.id]
+        );
+        created.push({ name: m.name, username: digits });
+      } catch (e) {
+        skipped.push({ name: m.name, reason: e.message });
+      }
+    }
+    if (created.length || reset.length) {
+      logActivity(req.user, {
+        action: 'bulk_reset_password', entityType: 'user',
+        label: `${created.length} new + ${reset.length} reset host-member login(s) to default password`,
+        details: [...created.map((c) => `${c.name} (new: ${c.username})`), ...reset.map((r) => `${r.name} (reset)`)].join(', ')
+      });
+    }
+    res.json({ created, reset, skipped, default_password: DEFAULT_PASSWORD });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.put('/users/:id/approve', requireSuperAdmin, async (req, res) => {
   await db.run(`UPDATE users SET status='approved', approved_at=NOW(), approved_by=$1 WHERE id=$2`, [req.user.id, req.params.id]);
   logActivity(req.user, { action: 'approve', entityType: 'user', entityId: Number(req.params.id) });

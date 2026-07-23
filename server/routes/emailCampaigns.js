@@ -33,9 +33,14 @@ const AUDIENCES = {
   },
   host_member: {
     label: 'Host Members',
-    sql: `SELECT id, name, email, phone, NULL::text AS club, designation,
-            company, NULL::text AS organization, NULL::text AS tier, NULL::text AS topic, NULL::text AS code
-          FROM host_members`
+    // LEFT JOIN users so a campaign can merge {{username}} (their login,
+    // e.g. for a "here are your portal credentials" email) alongside the
+    // usual profile fields. Someone with no login yet just gets an empty
+    // {{username}} — personalize() already turns null into ''.
+    sql: `SELECT hm.id, hm.name, hm.email, hm.phone, NULL::text AS club, hm.designation,
+            hm.company, NULL::text AS organization, NULL::text AS tier, NULL::text AS topic, NULL::text AS code,
+            u.username AS username
+          FROM host_members hm LEFT JOIN users u ON u.host_member_id = hm.id`
   },
   volunteer: {
     label: 'Volunteers',
@@ -85,10 +90,12 @@ async function fetchAudienceRows(audience_type, { recipientIds, hasEmailOnly = t
 }
 
 // Replaces {{token}} placeholders with the matching field from `row`
-// (name/email/phone/club/designation/company/organization/tier/topic/code).
+// (name/email/phone/club/designation/company/organization/tier/topic/code/
+// username — the last only populated for audiences whose SQL selects it,
+// currently just host_member).
 // Any token not on that list — including a typo — is quietly replaced with
 // an empty string rather than left dangling in the sent email.
-const MERGE_FIELDS = ['name', 'email', 'phone', 'club', 'designation', 'company', 'organization', 'tier', 'topic', 'code'];
+const MERGE_FIELDS = ['name', 'email', 'phone', 'club', 'designation', 'company', 'organization', 'tier', 'topic', 'code', 'username'];
 function personalize(template, row) {
   return String(template || '').replace(/\{\{\s*([a-zA-Z_]+)\s*\}\}/g, (m, key) => {
     const k = key.toLowerCase();
