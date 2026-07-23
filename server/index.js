@@ -45,6 +45,13 @@ app.use('/api/push', require('./routes/push'));
 // Mounted unwrapped, same pattern as /api/push and /api/host.
 app.use('/api/messages', require('./routes/messages'));
 
+// --- Email Campaigns: bulk personalized email blasts (via Resend) to any
+// audience that carries an email column — Delegates, Host Members,
+// Volunteers, Sponsors, Guest Speakers, Guest Visitors. Admin-only, same
+// protection level as Communications above. See emailCampaigns.js file
+// header for the send-in-background design.
+app.use('/api/email-campaigns', requireAdminRole, require('./routes/emailCampaigns'));
+
 // Public, no-login "update my own details" route — lets any delegate, host
 // member, or volunteer fill in their own Shirt Size / T-Shirt Size / Photo /
 // Business Card via a shared link (public/my-profile.html), without needing

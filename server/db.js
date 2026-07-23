@@ -1391,6 +1391,49 @@ async function initSchema() {
              ft.transaction_date, ft.notes
       FROM finance_transactions ft WHERE ft.type = 'inward';
   `);
+
+  // --- Email Campaigns: bulk, personalized email blasts (via Resend) to any
+  // of the audience tables that carry an email column (Delegates, Host
+  // Members, Volunteers, Sponsors, Speakers, Guest Visitors). Deliberately
+  // separate from `messages` (in-app announcements, requires a login) —
+  // this reaches people who have no account at all, straight to their inbox,
+  // with per-recipient send tracking so a partial failure is visible instead
+  // of silent. See server/routes/emailCampaigns.js.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS email_campaigns (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      body_html TEXT NOT NULL,
+      audience_type TEXT NOT NULL CHECK (audience_type IN ('participant','host_member','volunteer','sponsor','speaker','guest_visitor')),
+      -- NULL = every row of audience_type that has a valid email on file.
+      -- Non-null = only these specific ids (from a "click to pick" grid in
+      -- the admin UI) — lets an admin hand-pick individual Delegates/Host
+      -- Members instead of always blasting an entire category.
+      recipient_ids INTEGER[],
+      from_name TEXT NOT NULL DEFAULT 'SINC2026 Congress',
+      status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','sending','sent','failed')),
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMP DEFAULT NOW(),
+      sent_at TIMESTAMP
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS email_campaign_recipients (
+      id SERIAL PRIMARY KEY,
+      campaign_id INTEGER NOT NULL REFERENCES email_campaigns(id) ON DELETE CASCADE,
+      recipient_type TEXT NOT NULL,
+      recipient_id INTEGER NOT NULL,
+      name TEXT,
+      email TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','sent','failed')),
+      resend_id TEXT,
+      error TEXT,
+      sent_at TIMESTAMP,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS email_campaign_recipients_campaign_idx ON email_campaign_recipients(campaign_id);`);
 }
 
 module.exports = { pool, all, get, run, transaction, initSchema };
