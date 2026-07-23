@@ -71,7 +71,8 @@ router.get('/:id', async (req, res) => {
 });
 
 router.post('/', async (req, res) => {
-  let { name, tier, contact_person, phone, email, sponsor_pass_code, guest_relation_host_member_id, status, notes } = req.body;
+  let { name, tier, contact_person, phone, email, sponsor_pass_code, guest_relation_host_member_id, status, notes,
+    payment_status, payment_amount, payment_mode, payment_date } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'name is required' });
   try {
     const result = await db.transaction(async (tx) => {
@@ -80,10 +81,12 @@ router.post('/', async (req, res) => {
         sponsor_pass_code = await computeNextSponsorPassCode(tx);
       }
       return tx.run(`
-        INSERT INTO sponsors (name, tier, contact_person, phone, email, sponsor_pass_code, guest_relation_host_member_id, status, notes)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id
+        INSERT INTO sponsors (name, tier, contact_person, phone, email, sponsor_pass_code, guest_relation_host_member_id, status, notes,
+          payment_status, payment_amount, payment_mode, payment_date)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id
       `, [name.trim(), tier || '', contact_person || '', phone || '', email || '', sponsor_pass_code,
-          guest_relation_host_member_id || null, status || 'confirmed', notes || '']);
+          guest_relation_host_member_id || null, status || 'confirmed', notes || '',
+          payment_status || 'pending', payment_amount ? Number(payment_amount) : null, payment_mode || '', payment_date || null]);
     });
     logActivity(req.user, { action: 'create', entityType: 'sponsor', entityId: result.id, label: name.trim() });
     res.json({ id: result.id, sponsor_pass_code });
@@ -96,18 +99,25 @@ router.post('/', async (req, res) => {
 });
 
 router.put('/:id', async (req, res) => {
-  const { name, tier, contact_person, phone, email, guest_relation_host_member_id, status, notes } = req.body;
+  const { name, tier, contact_person, phone, email, guest_relation_host_member_id, status, notes,
+    payment_status, payment_amount, payment_mode, payment_date } = req.body;
   try {
     await db.run(`
       UPDATE sponsors SET
         name=COALESCE($1,name), tier=COALESCE($2,tier), contact_person=COALESCE($3,contact_person),
         phone=COALESCE($4,phone), email=COALESCE($5,email),
         guest_relation_host_member_id=$6,
-        status=COALESCE($7,status), notes=COALESCE($8,notes)
-      WHERE id=$9
+        status=COALESCE($7,status), notes=COALESCE($8,notes),
+        payment_status=COALESCE($9,payment_status),
+        payment_amount=COALESCE($10,payment_amount),
+        payment_mode=COALESCE($11,payment_mode),
+        payment_date=COALESCE($12,payment_date)
+      WHERE id=$13
     `, [name || null, tier !== undefined ? tier : null, contact_person !== undefined ? contact_person : null,
         phone !== undefined ? phone : null, email !== undefined ? email : null,
-        guest_relation_host_member_id || null, status || null, notes !== undefined ? notes : null, req.params.id]);
+        guest_relation_host_member_id || null, status || null, notes !== undefined ? notes : null,
+        payment_status || null, payment_amount !== undefined && payment_amount !== '' ? Number(payment_amount) : null,
+        payment_mode !== undefined ? payment_mode : null, payment_date || null, req.params.id]);
     logActivity(req.user, { action: 'update', entityType: 'sponsor', entityId: Number(req.params.id), label: name });
     res.json({ ok: true });
   } catch (e) {

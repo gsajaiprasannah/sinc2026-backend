@@ -1,6 +1,8 @@
 const express = require('express');
+const multer = require('multer');
 const db = require('../db');
 const { logActivity } = require('../lib/activityLogger');
+const { saveFile, deleteStoredFile } = require('../uploadHelper');
 const {
   PAYMENT_APPROVAL_ROLES,
   PURCHASE_APPROVAL_ROLES,
@@ -8,6 +10,11 @@ const {
 } = require('../lib/financeHelper');
 
 const router = express.Router();
+// Vendor/payee bills — a photo or PDF scan of the actual invoice they gave
+// us, distinct from the system-generated Payment/Purchase Voucher PDF (see
+// downloadFinanceOutwardVoucherPdf in admin.js). Same 10MB cap as every
+// other upload in this app.
+const uploadBill = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 // One query fragment (used by both /summary and /outward) that attaches
 // each outward transaction's approval progress as a JSON array — including
@@ -285,6 +292,49 @@ router.put('/outward/:id/delivery', async (req, res) => {
       WHERE id=$4
     `, [delivery_status || null, expected_delivery_date || null, actual_delivery_date || null, req.params.id]);
     logActivity(req.user, { action: 'update', entityType: 'finance_outward', entityId: Number(req.params.id), label: `delivery status: ${delivery_status || '—'}` });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// Attach the vendor/payee's actual bill/invoice file (photo or PDF) to an
+// outward payment or purchase request — separate from the delivery-status
+// flow above, and independent of approval status so a bill can be attached
+// at any point in the request's lifecycle. Replaces any existing bill (old
+// file is deleted so storage doesn't leak), same pattern as every other
+// photo/document upload in this app.
+router.post('/outward/:id/bill', (req, res, next) => {
+  uploadBill.single('file')(req, res, (err) => {
+    if (err) {
+      const friendly = err.code === 'LIMIT_FILE_SIZE' ? 'File is too large (max 10MB).' : 'Upload was interrupted — please try again.';
+      return res.status(400).json({ error: friendly });
+    }
+    next();
+  });
+}, async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'file is required' });
+  try {
+    const existing = await db.get(`SELECT bill_url FROM finance_transactions WHERE id=$1 AND type='outward'`, [req.params.id]);
+    if (!existing) return res.status(404).json({ error: 'Not found' });
+    const storedPath = await saveFile(req.file, 'finance-bills');
+    await db.run('UPDATE finance_transactions SET bill_url=$1, updated_at=NOW() WHERE id=$2', [storedPath, req.params.id]);
+    if (existing.bill_url) await deleteStoredFile(existing.bill_url);
+    logActivity(req.user, { action: 'update', entityType: 'finance_outward', entityId: Number(req.params.id), label: 'bill attached' });
+    res.json({ bill_url: storedPath });
+  } catch (e) {
+    console.error('Finance bill upload failed —', e.message);
+    res.status(500).json({ error: 'Upload failed: ' + e.message });
+  }
+});
+
+router.delete('/outward/:id/bill', async (req, res) => {
+  try {
+    const existing = await db.get(`SELECT bill_url FROM finance_transactions WHERE id=$1 AND type='outward'`, [req.params.id]);
+    if (!existing) return res.status(404).json({ error: 'Not found' });
+    await db.run('UPDATE finance_transactions SET bill_url=NULL, updated_at=NOW() WHERE id=$1', [req.params.id]);
+    if (existing.bill_url) await deleteStoredFile(existing.bill_url);
+    logActivity(req.user, { action: 'update', entityType: 'finance_outward', entityId: Number(req.params.id), label: 'bill removed' });
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
