@@ -742,6 +742,17 @@ async function initSchema() {
   await pool.query(`ALTER TABLE sponsors ADD COLUMN IF NOT EXISTS logo_url TEXT;`);
   await pool.query(`ALTER TABLE speakers ADD COLUMN IF NOT EXISTS photo_url TEXT;`);
 
+  // Sponsorship payment tracking — sponsorship RATES are still deliberately
+  // not modeled anywhere (see the sponsors table comment above), but once a
+  // tier/amount has actually been agreed and received, an admin can record it
+  // here so it shows up in the Finance module's Inward Ledger (with its own
+  // downloadable receipt) the same way registrations/host-member fees/stall
+  // bookings/pre-tour payments already do.
+  await pool.query(`ALTER TABLE sponsors ADD COLUMN IF NOT EXISTS payment_status TEXT NOT NULL DEFAULT 'pending' CHECK (payment_status IN ('pending','paid'));`);
+  await pool.query(`ALTER TABLE sponsors ADD COLUMN IF NOT EXISTS payment_amount NUMERIC;`);
+  await pool.query(`ALTER TABLE sponsors ADD COLUMN IF NOT EXISTS payment_mode TEXT;`);
+  await pool.query(`ALTER TABLE sponsors ADD COLUMN IF NOT EXISTS payment_date DATE;`);
+
   // --- Congress-wide member data collection: Shirt Size, T-Shirt Size, a
   // photo of the person, and a photo/scan of their business card. Requested
   // for every delegate, host member, and volunteer so goodies/kits can be
@@ -1295,6 +1306,14 @@ async function initSchema() {
   await pool.query(`ALTER TABLE finance_transactions ADD COLUMN IF NOT EXISTS delivery_status TEXT NOT NULL DEFAULT 'ordered' CHECK (delivery_status IN ('ordered','in_transit','delivered','delayed','cancelled'));`);
   await pool.query(`CREATE INDEX IF NOT EXISTS finance_transactions_vendor_idx ON finance_transactions(vendor_id);`);
 
+  // The actual bill/invoice file the vendor or payee gave us for this outward
+  // payment or purchase — distinct from the system-generated Payment/
+  // Purchase Voucher PDF (which is only an internal record of the
+  // disbursement, not evidence of what was billed). Stored the same way as
+  // every other upload in this app (R2 URL or local /uploads/... path) via
+  // uploadHelper.saveFile, and can be a photo or a PDF scan.
+  await pool.query(`ALTER TABLE finance_transactions ADD COLUMN IF NOT EXISTS bill_url TEXT;`);
+
   // Same linkage + delivery tracking on Inventory Items (the other place
   // goods get procured from a vendor — see server/routes/inventory.js).
   // procurement_status already covers the item's own planned->ordered->
@@ -1346,6 +1365,12 @@ async function initSchema() {
       LEFT JOIN participants p ON p.id = ptp.participant_id
       LEFT JOIN host_members hm2 ON hm2.id = ptp.host_member_id
       WHERE ptp.payment_status = 'paid' AND pt.price IS NOT NULL
+
+      UNION ALL
+      SELECT 'sponsor', s.id, 'Sponsorship' || CASE WHEN s.tier <> '' THEN ' - ' || s.tier ELSE '' END,
+             s.name, s.payment_amount, s.payment_mode,
+             COALESCE(s.payment_date, s.created_at::date), NULL
+      FROM sponsors s WHERE s.payment_status = 'paid' AND s.payment_amount IS NOT NULL AND s.payment_amount > 0
 
       UNION ALL
       SELECT 'manual', ft.id, ft.category, ft.payee_or_payer, ft.amount, ft.payment_mode,
