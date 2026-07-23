@@ -28,6 +28,37 @@ router.get('/', async (req, res) => {
   }
 });
 
+// Streams any R2-hosted file back through our own server instead of the
+// browser hitting the public r2.dev URL directly. Added because Cloudflare's
+// bot-mitigation in front of the public r2.dev bucket domain blocks
+// programmatic fetch()/CORS-mode requests with a 503 (a plain <img> tag load
+// still works fine — that's why record-card thumbnails looked normal even
+// though embedding the same photo into a jsPDF-generated badge/PDF silently
+// failed and fell back to a placeholder). Fetching the object server-side
+// via the R2 API (not the public URL) sidesteps that entirely, and since the
+// response comes from our own domain the browser can read it into a canvas
+// without a CORS/taint problem. Restricted to URLs under our own R2 public
+// base to avoid this becoming an open SSRF proxy.
+router.get('/proxy-image', async (req, res) => {
+  try {
+    const url = req.query.url;
+    if (!url || typeof url !== 'string') return res.status(400).json({ error: 'url query param required' });
+    const base = (process.env.R2_PUBLIC_URL_BASE || '').replace(/\/$/, '');
+    if (!R2_ENABLED || !base || !url.startsWith(base + '/')) {
+      return res.status(400).json({ error: 'url must be an R2-hosted media URL' });
+    }
+    const key = url.slice(base.length + 1);
+    const obj = await s3Client.send(new S3Cmds.GetObjectCommand({ Bucket: process.env.R2_BUCKET, Key: key }));
+    res.setHeader('Content-Type', obj.ContentType || 'application/octet-stream');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    if (obj.ContentLength) res.setHeader('Content-Length', obj.ContentLength);
+    obj.Body.pipe(res);
+  } catch (e) {
+    console.error('Media proxy-image failed —', e.message);
+    res.status(502).json({ error: 'Could not fetch image: ' + e.message });
+  }
+});
+
 // Forces a real download (correct filename, Content-Disposition: attachment)
 // instead of the browser trying to play/preview the file inline. We stream it
 // through our own server rather than linking straight to the R2/public URL —
