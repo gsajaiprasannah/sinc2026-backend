@@ -654,6 +654,15 @@ async function initSchema() {
   // Safe to run repeatedly — adds the column only if an older schema is missing it.
   await pool.query(`ALTER TABLE participants ADD COLUMN IF NOT EXISTS dietary_preference TEXT;`);
   await pool.query(`ALTER TABLE participants ADD COLUMN IF NOT EXISTS departure_point TEXT;`);
+  // Drink preference (comma-separated e.g. "Wine, Beer" or "No Alcohol") and
+  // free-text special requests — collected from the Delegate self-fill page
+  // (my-travel.html) and mirrored into the admin Delegates form. Pre-tour
+  // interest deliberately isn't a column here — it reuses the existing
+  // pre_tour_participants join table (see server/routes/pretours.js) so a
+  // self-registered signup shows up in the same "who's signed up for this
+  // tour" admin view as one entered manually.
+  await pool.query(`ALTER TABLE participants ADD COLUMN IF NOT EXISTS drink_preference TEXT;`);
+  await pool.query(`ALTER TABLE participants ADD COLUMN IF NOT EXISTS special_requests TEXT;`);
 
   // --- Per-participant Registration ID (e.g. SINC2026-0001) ---
   // One code per participant row, assigned automatically on insert via a DB
