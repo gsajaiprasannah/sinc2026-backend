@@ -44,4 +44,27 @@ router.get('/speakers', async (req, res) => {
   }
 });
 
+// Public, read-only, narrow view of Pre Tours for the Delegate self-fill
+// page's "Pre-Tour" signup dropdown (my-travel.html, unauthenticated — the
+// full /api/pretours route stays admin-only). Includes capacity and how many
+// seats are already taken so the dropdown can show live availability —
+// pre-tours are limited-seat and first-come-first-served (enforced server-side
+// too, in publicProfile.js's PUT /participant/:id/pretour), so a delegate
+// should be able to see at a glance whether a tour still has room before
+// picking it. Cancelled tours are excluded.
+router.get('/pretours', async (req, res) => {
+  try {
+    const rows = await db.all(`
+      SELECT pt.id, pt.name, pt.start_date, pt.end_date, pt.price, pt.capacity,
+        (SELECT COUNT(*) FROM pre_tour_participants ptp WHERE ptp.pre_tour_id = pt.id) AS participant_count
+      FROM pre_tours pt
+      WHERE COALESCE(pt.status, '') <> 'cancelled'
+      ORDER BY pt.start_date NULLS LAST, pt.id
+    `);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 module.exports = router;

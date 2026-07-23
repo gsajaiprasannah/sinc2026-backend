@@ -16,12 +16,15 @@ const uploadImage = multer({ storage: multer.memoryStorage(), limits: { fileSize
 
 const FIELDS = [
   'registration_id', 'is_primary', 'name', 'phone', 'whatsapp', 'email', 'address', 'club_id', 'designation',
-  'dietary_preference',
+  'dietary_preference', 'drink_preference', 'special_requests',
   'travel_mode', 'travel_number', 'travel_datetime', 'arrival_point',
   'departure_mode', 'departure_number', 'departure_datetime', 'departure_point',
   'pickup_by', 'pickup_vehicle', 'pickup_phone', 'spoc_name', 'spoc_phone', 'notes',
   // Congress-wide member data collection — see server/db.js comment.
   'shirt_size', 'tshirt_size', 'waist_size'
+  // NOTE: pre-tour interest is NOT a column here — it's a row in the
+  // pre_tour_participants join table, set/cleared via PUT /:id/pretour below
+  // (mirrored on the public side by publicProfile.js's own /pretour route).
 ];
 
 // Core identity/registration fields — once a delegate exists, only a super
@@ -136,12 +139,19 @@ const SPOC_JOIN = `
 `;
 const SPOC_SELECT = `spoc_hm.id AS spoc_host_member_id, spoc_hm.name AS spoc_host_member_name, spoc_hm.phone AS spoc_host_member_phone`;
 
+// A delegate's pre-tour interest lives in pre_tour_participants (not a
+// participants column — see server/db.js comment), so it has to be pulled in
+// as a subquery. ORDER BY id LIMIT 1 because a delegate is only expected to
+// be signed up for one pre-tour at a time (PUT /:id/pretour below enforces
+// that by replacing any existing row rather than adding a second one).
+const PRETOUR_SELECT = `(SELECT ptp.pre_tour_id FROM pre_tour_participants ptp WHERE ptp.participant_id = p.id ORDER BY ptp.id LIMIT 1) AS pre_tour_id`;
+
 router.get('/', async (req, res) => {
   try {
     const search = req.query.q ? `%${req.query.q}%` : null;
     const rows = search
       ? await db.all(`
-          SELECT p.*, r.reg_number, r.reg_type, r.payment_status, c.name AS club_name, ${SPOC_SELECT}
+          SELECT p.*, r.reg_number, r.reg_type, r.payment_status, c.name AS club_name, ${SPOC_SELECT}, ${PRETOUR_SELECT}
           FROM participants p
           LEFT JOIN registrations r ON r.id = p.registration_id
           LEFT JOIN clubs c ON c.id = p.club_id
@@ -150,7 +160,7 @@ router.get('/', async (req, res) => {
           ORDER BY p.created_at DESC
         `, [search])
       : await db.all(`
-          SELECT p.*, r.reg_number, r.reg_type, r.payment_status, c.name AS club_name, ${SPOC_SELECT}
+          SELECT p.*, r.reg_number, r.reg_type, r.payment_status, c.name AS club_name, ${SPOC_SELECT}, ${PRETOUR_SELECT}
           FROM participants p
           LEFT JOIN registrations r ON r.id = p.registration_id
           LEFT JOIN clubs c ON c.id = p.club_id
@@ -180,7 +190,7 @@ router.get('/host-members-lite', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const row = await db.get(`
-      SELECT p.*, r.reg_number, r.reg_type, r.payment_status, c.name AS club_name, ${SPOC_SELECT}
+      SELECT p.*, r.reg_number, r.reg_type, r.payment_status, c.name AS club_name, ${SPOC_SELECT}, ${PRETOUR_SELECT}
       FROM participants p
       LEFT JOIN registrations r ON r.id = p.registration_id
       LEFT JOIN clubs c ON c.id = p.club_id
@@ -276,6 +286,41 @@ router.put('/:id', async (req, res) => {
     await db.run(`UPDATE participants SET ${setClause} WHERE id=$${cols.length + 1}`, [...values, req.params.id]);
     logActivity(req.user, { action: 'update', entityType: 'participant', entityId: Number(req.params.id), label: body.name });
     res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// Sets/replaces/clears a delegate's pre-tour signup (one row in
+// pre_tour_participants, same table Pre Tours' own "Manage" sub-panel uses —
+// see pretours.js's POST/DELETE /:id/participants). Kept here too so the
+// Delegates form's Pre-Tour field can save in the same request cycle as the
+// rest of the delegate's edits, without the admin needing the separate Pre
+// Tours module grant. Unlike pretours.js's own add route, this deliberately
+// does NOT enforce the tour's capacity — an admin manually assigning a
+// delegate is an intentional override (e.g. a VIP added after the tour
+// nominally filled up); the first-come-first-served capacity cap only
+// applies to the public self-service signup in publicProfile.js.
+router.put('/:id/pretour', async (req, res) => {
+  const pretourId = req.body.pre_tour_id ? Number(req.body.pre_tour_id) : null;
+  const participantId = req.params.id;
+  try {
+    const existing = await db.get('SELECT id, pre_tour_id FROM pre_tour_participants WHERE participant_id=$1 ORDER BY id LIMIT 1', [participantId]);
+    if (!pretourId) {
+      if (existing) await db.run('DELETE FROM pre_tour_participants WHERE id=$1', [existing.id]);
+      return res.json({ ok: true, pre_tour_id: null });
+    }
+    if (existing && Number(existing.pre_tour_id) === pretourId) {
+      return res.json({ ok: true, pre_tour_id: pretourId }); // unchanged — leave payment_status/notes intact
+    }
+    const tour = await db.get('SELECT id FROM pre_tours WHERE id=$1', [pretourId]);
+    if (!tour) return res.status(400).json({ error: 'Selected pre-tour no longer exists.' });
+    if (existing) await db.run('DELETE FROM pre_tour_participants WHERE id=$1', [existing.id]);
+    await db.run(
+      `INSERT INTO pre_tour_participants (pre_tour_id, participant_id, payment_status) VALUES ($1,$2,'pending')`,
+      [pretourId, participantId]
+    );
+    res.json({ ok: true, pre_tour_id: pretourId });
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
@@ -420,10 +465,11 @@ router.post('/bulk-upload', upload.single('file'), async (req, res) => {
         await tx.run(`
           INSERT INTO participants
             (registration_id, is_primary, name, phone, whatsapp, email, address, club_id, designation, dietary_preference,
+             drink_preference, special_requests,
              travel_mode, travel_number, travel_datetime, arrival_point,
              departure_mode, departure_number, departure_datetime, departure_point,
              pickup_by, pickup_vehicle, pickup_phone, spoc_name, spoc_phone, notes)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
         `, [
           reg ? reg.id : null,
           r.is_primary !== undefined ? Number(r.is_primary) : 1,
@@ -435,6 +481,8 @@ router.post('/bulk-upload', upload.single('file'), async (req, res) => {
           club ? club.id : null,
           r.designation || '',
           r.dietary_preference || null,
+          r.drink_preference || null,
+          r.special_requests || '',
           r.travel_mode || null,
           r.travel_number || '',
           r.travel_datetime || '',
