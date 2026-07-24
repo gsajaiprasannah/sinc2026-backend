@@ -1541,6 +1541,21 @@ async function initSchema() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS attendance_log_entity_idx ON attendance_log(entity_type, entity_id);`);
+
+  // --- Scanner role + Registration Desk scan point ---------------------
+  // Dedicated login type for scanning-duty-only staff, instead of always
+  // bolting scan_point onto an unrelated role like media/volunteer. 'scanner'
+  // has no linked profile record (same pattern as 'media' in
+  // LINKED_ROLE_FIELDS/auth.js) — which station it covers (Hotel Desk,
+  // Transport, Food Counter, Goodies/Inventory, Registration Desk) is set
+  // entirely via scan_point. Stalls scanning duty still uses the existing
+  // stall_owner role (tied to one specific stall_id), not 'scanner' — see
+  // the admin panel's "Scanner Logins" section, which creates either kind
+  // from one unified "Station" picker.
+  await pool.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;`);
+  await pool.query(`ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('super_admin','admin','host_member','media','transporter','driver','volunteer','vendor','stall_owner','scanner'));`);
+  await pool.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_scan_point_check;`);
+  await pool.query(`ALTER TABLE users ADD CONSTRAINT users_scan_point_check CHECK (scan_point IS NULL OR scan_point IN ('hotel_desk','transport','food_counter','inventory','registration'));`);
 }
 
 module.exports = { pool, all, get, run, transaction, initSchema };
