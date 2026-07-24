@@ -1,5 +1,6 @@
 const express = require('express');
 const db = require('../db');
+const { requireAdminRole } = require('../auth');
 
 const router = express.Router();
 
@@ -13,7 +14,15 @@ router.get('/', async (req, res) => {
   }
 });
 
-router.post('/', async (req, res) => {
+// This router is mounted at /api/happenings with only a blanket "any
+// logged-in user" gate in server/index.js (GET stays public for the
+// homepage's Live Happenings feed; the global mutating-methods gate just
+// requires *a* valid token, not a specific role) — meaning any otherwise-
+// valid login (scanner, driver, transporter, vendor, stall_owner, etc, none
+// of which have any legitimate reason to post a public announcement) could
+// post to the public feed. No self-service role posts happenings by design,
+// so this stays admin/super_admin only.
+router.post('/', requireAdminRole, async (req, res) => {
   const { title, description, category, posted_by } = req.body;
   if (!title) return res.status(400).json({ error: 'title is required' });
   try {

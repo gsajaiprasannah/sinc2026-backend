@@ -4,9 +4,30 @@ const path = require('path');
 const db = require('../db');
 const { R2_ENABLED, saveFile, deleteStoredFile, s3Client, S3Cmds } = require('../uploadHelper');
 const push = require('../pushHelper');
+const { requireAuth } = require('../auth');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 * 1024 } });
+
+// This router is mounted at /api/media with only a blanket "any logged-in
+// user" gate in server/index.js (GET is public for the homepage's video
+// reel/posters; the global mutating-methods gate just requires *a* valid
+// token, not a specific role) — the same router is ALSO reachable properly
+// role-checked via /api/portal-modules/media for host_member/volunteer
+// committee grants (see committeeModuleAccess.js). That left a gap: any
+// other otherwise-valid login (scanner, driver, transporter, vendor,
+// stall_owner, or a host_member/volunteer with no media grant) could still
+// upload/edit media by calling THIS direct mount instead. 'media' itself
+// must stay allowed — media.html's whole job is uploading here directly.
+const MEDIA_DIRECT_ROLES = ['admin', 'super_admin', 'media'];
+function requireMediaRole(req, res, next) {
+  requireAuth(req, res, () => {
+    if (!MEDIA_DIRECT_ROLES.includes(req.user.role)) {
+      return res.status(403).json({ error: 'Your login does not have access to the Media module.' });
+    }
+    next();
+  });
+}
 
 console.log(R2_ENABLED
   ? 'Media storage: Cloudflare R2 (bucket: ' + process.env.R2_BUCKET + ')'
@@ -97,7 +118,7 @@ router.get('/:id/download', async (req, res) => {
   }
 });
 
-router.post('/upload', (req, res, next) => {
+router.post('/upload', requireMediaRole, (req, res, next) => {
   // Run multer manually (instead of as route middleware) so we can catch its
   // errors — e.g. LIMIT_FILE_SIZE, or a multipart stream that ends early
   // because the client's connection dropped mid-upload — and return a clean
@@ -139,7 +160,7 @@ router.post('/upload', (req, res, next) => {
   }
 });
 
-router.put('/:id', async (req, res) => {
+router.put('/:id', requireMediaRole, async (req, res) => {
   const { title, active, sort_order } = req.body;
   try {
     await db.run(
