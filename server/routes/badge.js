@@ -17,7 +17,9 @@
 //          scan.
 //        - a host_member/volunteer/driver/transporter deputised with a
 //          scan_point (Settings -> Change role -> Scan point) gets that one
-//          duty's scan action (hotel_desk / food_counter / inventory).
+//          duty's scan action (hotel_desk / food_counter / inventory /
+//          registration — a dedicated 'scanner' role login usually carries
+//          this instead, see the admin panel's "Scanner Logins" section).
 //        - a stall_owner login gets the "log stall visit" action, scoped to
 //          their own stall_id.
 //      Every OTHER role (media, vendor, or a login with none of the above)
@@ -99,7 +101,12 @@ function computeCaps(user) {
     transport: isSuperStaff || user.scan_point === 'transport' || !!user.vehicle_id,
     food_counter: isSuperStaff || user.scan_point === 'food_counter',
     stall_owner: user.role === 'stall_owner' && !!user.stall_id,
-    inventory: isSuperStaff || user.scan_point === 'inventory'
+    inventory: isSuperStaff || user.scan_point === 'inventory',
+    // Registration Desk duty: no dedicated scan endpoint of its own — it
+    // rides the same universal "Mark Attendance" (gate) action every staff
+    // view already shows once ANY cap is granted (see hasAnyCap below). This
+    // cap's only job is to let a registration-only login past that gate.
+    registration: isSuperStaff || user.scan_point === 'registration'
   };
 }
 

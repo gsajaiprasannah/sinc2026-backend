@@ -5,7 +5,7 @@ const { logActivity } = require('../lib/activityLogger');
 
 const router = express.Router();
 
-const SCAN_POINTS = ['hotel_desk', 'transport', 'food_counter', 'inventory'];
+const SCAN_POINTS = ['hotel_desk', 'transport', 'food_counter', 'inventory', 'registration'];
 
 function publicUser(u) {
   return {
@@ -34,7 +34,11 @@ const LINKED_ROLE_FIELDS = {
   // against this stall_id (see /staff/:token/stall-visit in badge.js).
   stall_owner: { column: 'stall_id', table: 'stall_bookings', label: 'stall' }
 };
-const ALL_ROLES = ['super_admin', 'admin', 'host_member', 'media', 'transporter', 'driver', 'volunteer', 'vendor', 'stall_owner'];
+// 'scanner': a dedicated scan-duty-only login (Hotel Desk/Transport/Food
+// Counter/Goodies/Registration) with no linked profile record — same
+// no-linked-record pattern as 'media', just for badge-scanning staff instead
+// of the design team. Which station it covers lives entirely in scan_point.
+const ALL_ROLES = ['super_admin', 'admin', 'host_member', 'media', 'transporter', 'driver', 'volunteer', 'vendor', 'stall_owner', 'scanner'];
 
 // --- Self-service signup: creates a PENDING account. Cannot log in until a ---
 // --- super admin approves it from the Settings panel.                     ---
