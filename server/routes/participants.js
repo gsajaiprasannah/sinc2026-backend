@@ -174,7 +174,7 @@ router.get('/', async (req, res) => {
     // participants mount), so this check is what actually keeps it private,
     // not the admin.js rendering layer.
     if (!req.user || req.user.role !== 'super_admin') {
-      rows.forEach((r) => { delete r.aadhaar_number; delete r.aadhaar_url; });
+      rows.forEach((r) => { delete r.aadhaar_number; delete r.aadhaar_url; delete r.passport_number; delete r.passport_url; });
     }
     res.json(rows);
   } catch (e) {
@@ -361,11 +361,12 @@ router.put('/:id/spoc', async (req, res) => {
 });
 
 router.delete('/:id', async (req, res) => {
-  const existing = await db.get('SELECT name, photo_url, business_card_url, aadhaar_url FROM participants WHERE id=$1', [req.params.id]);
+  const existing = await db.get('SELECT name, photo_url, business_card_url, aadhaar_url, passport_url FROM participants WHERE id=$1', [req.params.id]);
   if (existing) {
     await deleteStoredFile(existing.photo_url);
     await deleteStoredFile(existing.business_card_url);
     await deleteStoredFile(existing.aadhaar_url);
+    await deleteStoredFile(existing.passport_url);
   }
   await deleteChecklistForOwner('participant', req.params.id);
   await db.run('DELETE FROM participants WHERE id=$1', [req.params.id]);
@@ -448,12 +449,17 @@ router.delete('/:id/business-card', async (req, res) => {
   }
 });
 
-// Aadhaar (Government ID) document — same upload mechanism as photo/business
-// card, but gated to super_admin only (not just any admin/volunteer this
-// router is reachable by) given how sensitive this document is. Accepts
-// image/* AND application/pdf — Aadhaar is very often shared as a PDF scan
-// (uploadImage itself doesn't restrict mimetype, only size, so no change
-// needed there).
+// Aadhaar / Passport (government identity documents) — same upload
+// mechanism as photo/business card, but gated to super_admin only (not just
+// any admin/volunteer this router is reachable by) given how sensitive
+// these documents are. A Delegate only ever needs ONE of the two (Aadhaar
+// for Indian delegates, Passport for international delegates who don't hold
+// one — see publicProfile.js's PUT /participant/:id/travel for the "at
+// least one complete" validation), but the admin side still exposes both
+// upload endpoints independently since an admin may need to add/replace
+// either one on a Delegate's behalf. Accepts image/* AND application/pdf —
+// both documents are very often shared as a PDF scan (uploadImage itself
+// doesn't restrict mimetype, only size, so no change needed there).
 function requireSuperAdminHere(req, res) {
   if (!req.user || req.user.role !== 'super_admin') {
     res.status(403).json({ error: 'Only a super admin can view or manage Aadhaar documents.' });
@@ -493,6 +499,43 @@ router.delete('/:id/aadhaar', async (req, res) => {
     if (!existing) return res.status(404).json({ error: 'Delegate not found' });
     await db.run('UPDATE participants SET aadhaar_url=NULL WHERE id=$1', [req.params.id]);
     if (existing.aadhaar_url) await deleteStoredFile(existing.aadhaar_url);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+router.post('/:id/passport', (req, res, next) => {
+  if (!requireSuperAdminHere(req, res)) return;
+  uploadImage.single('file')(req, res, (err) => {
+    if (err) {
+      const friendly = err.code === 'LIMIT_FILE_SIZE' ? 'File is too large (max 10MB).' : 'Upload was interrupted — please try again.';
+      return res.status(400).json({ error: friendly });
+    }
+    next();
+  });
+}, async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'file is required' });
+  try {
+    const existing = await db.get('SELECT passport_url FROM participants WHERE id=$1', [req.params.id]);
+    if (!existing) return res.status(404).json({ error: 'Delegate not found' });
+    const storedPath = await saveFile(req.file, 'participant-passport');
+    await db.run('UPDATE participants SET passport_url=$1 WHERE id=$2', [storedPath, req.params.id]);
+    if (existing.passport_url) await deleteStoredFile(existing.passport_url);
+    res.json({ passport_url: storedPath });
+  } catch (e) {
+    console.error('Delegate Passport upload failed —', e.message);
+    res.status(500).json({ error: 'Upload failed: ' + e.message });
+  }
+});
+
+router.delete('/:id/passport', async (req, res) => {
+  if (!requireSuperAdminHere(req, res)) return;
+  try {
+    const existing = await db.get('SELECT passport_url FROM participants WHERE id=$1', [req.params.id]);
+    if (!existing) return res.status(404).json({ error: 'Delegate not found' });
+    await db.run('UPDATE participants SET passport_url=NULL WHERE id=$1', [req.params.id]);
+    if (existing.passport_url) await deleteStoredFile(existing.passport_url);
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });

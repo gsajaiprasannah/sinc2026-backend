@@ -49,7 +49,7 @@ async function findMatches(name, phone) {
       ? `, address, travel_mode, travel_number, travel_datetime, arrival_point,
          departure_mode, departure_number, departure_datetime, departure_point,
          dietary_preference, drink_preference, special_requests, business_profile,
-         aadhaar_number, aadhaar_url,
+         aadhaar_number, aadhaar_url, passport_number, passport_url,
          (SELECT ptp.pre_tour_id FROM pre_tour_participants ptp WHERE ptp.participant_id = ${table}.id ORDER BY ptp.id LIMIT 1) AS pre_tour_id`
       : '';
     const rows = await db.all(`
@@ -132,17 +132,35 @@ const TRAVEL_MODES = ['flight', 'train', 'road', 'other'];
 function cleanMode(v) { return TRAVEL_MODES.includes(v) ? v : null; }
 function cleanText(v) { return (v === undefined || v === null || String(v).trim() === '') ? null : String(v).trim(); }
 
-// Aadhaar is mandatory for Delegates — this has to be exactly the 12 digits
-// an Aadhaar number actually has, spaces/dashes stripped first since people
-// commonly write it as "1234 5678 9012". Returns { value, error } rather
-// than throwing so the caller can decide whether to block the whole save
-// (see the PUT handler below, which also requires the document itself —
-// aadhaar_url — to already be on file before it will accept a save).
+// International Delegates don't hold an Aadhaar, so a Delegate only ever
+// needs to provide ONE of Aadhaar or Passport — not both, and not
+// specifically Aadhaar. Both cleaners are therefore "optional, but if you
+// typed something it has to be valid": empty input is not an error here,
+// it's just not a complete document on its own. The PUT handler below is
+// what actually enforces "at least one of the two is fully provided".
+//
+// Aadhaar: exactly the 12 digits an Aadhaar number actually has,
+// spaces/dashes stripped first since people commonly write it as
+// "1234 5678 9012".
 function cleanAadhaar(v) {
   const digits = String(v || '').replace(/\D/g, '');
-  if (!digits) return { value: null, error: 'Aadhaar number is required.' };
+  if (!digits) return { value: null, error: null };
   if (digits.length !== 12) return { value: null, error: 'Aadhaar number must be exactly 12 digits.' };
   return { value: digits, error: null };
+}
+
+// Passport: formats vary a lot by issuing country (letters + digits, lengths
+// from about 6 to 9 characters typically, sometimes more) — so this is
+// deliberately lenient rather than matching one country's exact pattern.
+// Spaces are stripped and the value is upper-cased for consistent storage/
+// display; only rejected if it's clearly not a plausible passport number.
+function cleanPassport(v) {
+  const cleaned = String(v || '').replace(/\s+/g, '').toUpperCase();
+  if (!cleaned) return { value: null, error: null };
+  if (!/^[A-Z0-9]{5,15}$/.test(cleaned)) {
+    return { value: null, error: 'Passport number looks incorrect — please double-check it (letters and numbers only, 5–15 characters).' };
+  }
+  return { value: cleaned, error: null };
 }
 
 // Same-spirit as admin.js's ensureTransportPoint — auto-registers any new
@@ -158,13 +176,15 @@ async function ensurePoint(name) {
   );
 }
 
-// Aadhaar (both the number and the scanned document) is mandatory here —
-// the frontend (mytravel.js) uploads the Aadhaar file BEFORE calling this
-// route specifically so that, by the time this handler runs, aadhaar_url is
-// already set on the row (either from a prior save, or from the upload that
-// just happened seconds ago in the same "Save changes" click). That lets
-// this handler check aadhaar_url the normal way instead of trying to
-// coordinate two separate HTTP requests atomically.
+// A Delegate must provide a complete identity document — either Aadhaar
+// (number + scan) or Passport (number + scan), not necessarily both. The
+// frontend (mytravel.js) uploads whichever document file the person picked
+// BEFORE calling this route, specifically so that by the time this handler
+// runs, aadhaar_url/passport_url is already set on the row (either from a
+// prior save, or from the upload that just happened seconds ago in the same
+// "Save changes" click) — that lets this handler check the URL columns the
+// normal way instead of trying to coordinate two separate HTTP requests
+// atomically.
 router.put('/participant/:id/travel', async (req, res) => {
   try {
     const verified = await verifyOwnership('participant', req.params.id, req.body.name, req.body.phone);
@@ -172,10 +192,16 @@ router.put('/participant/:id/travel', async (req, res) => {
     const b = req.body;
     const aadhaar = cleanAadhaar(b.aadhaar_number);
     if (aadhaar.error) return res.status(400).json({ error: aadhaar.error });
-    const existingDoc = await db.get('SELECT aadhaar_url FROM participants WHERE id=$1', [req.params.id]);
-    if (!existingDoc || !existingDoc.aadhaar_url) {
-      return res.status(400).json({ error: 'Please upload your Aadhaar document (photo or PDF scan) before saving.' });
+    const passport = cleanPassport(b.passport_number);
+    if (passport.error) return res.status(400).json({ error: passport.error });
+
+    const existingDoc = await db.get('SELECT aadhaar_url, passport_url FROM participants WHERE id=$1', [req.params.id]);
+    const hasAadhaar = !!(aadhaar.value && existingDoc && existingDoc.aadhaar_url);
+    const hasPassport = !!(passport.value && existingDoc && existingDoc.passport_url);
+    if (!hasAadhaar && !hasPassport) {
+      return res.status(400).json({ error: 'Please provide a complete identity document — either your Aadhaar number and a scan, or your Passport number and a scan.' });
     }
+
     await db.run(`
       UPDATE participants SET
         email=$1,
@@ -183,15 +209,15 @@ router.put('/participant/:id/travel', async (req, res) => {
         departure_mode=$7, departure_number=$8, departure_datetime=$9, departure_point=$10,
         shirt_size=$11, tshirt_size=$12, waist_size=$13,
         dietary_preference=$14, drink_preference=$15, special_requests=$16, business_profile=$17,
-        aadhaar_number=$18
-      WHERE id=$19
+        aadhaar_number=$18, passport_number=$19
+      WHERE id=$20
     `, [
       cleanText(b.email),
       cleanText(b.address), cleanMode(b.travel_mode), cleanText(b.travel_number), cleanText(b.travel_datetime), cleanText(b.arrival_point),
       cleanMode(b.departure_mode), cleanText(b.departure_number), cleanText(b.departure_datetime), cleanText(b.departure_point),
       cleanText(b.shirt_size), cleanText(b.tshirt_size), cleanText(b.waist_size),
       cleanText(b.dietary_preference), cleanText(b.drink_preference), cleanText(b.special_requests), cleanText(b.business_profile),
-      aadhaar.value,
+      aadhaar.value, passport.value,
       req.params.id
     ]);
     await Promise.all([ensurePoint(b.arrival_point), ensurePoint(b.departure_point)]);
@@ -305,6 +331,26 @@ router.post('/participant/:id/aadhaar', handleUpload(), async (req, res) => {
     res.json({ aadhaar_url: storedPath });
   } catch (e) {
     console.error('Public profile Aadhaar upload failed —', e.message);
+    res.status(500).json({ error: 'Upload failed: ' + e.message });
+  }
+});
+
+// POST /participant/:id/passport — multipart form with fields: name, phone,
+// file. Delegate-only, same shape as the Aadhaar upload above — this is the
+// alternate identity document for international Delegates who don't have an
+// Aadhaar. Accepts a PDF scan as well as an image.
+router.post('/participant/:id/passport', handleUpload(), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'file is required' });
+  try {
+    const verified = await verifyOwnership('participant', req.params.id, req.body.name, req.body.phone);
+    if (!verified) return res.status(403).json({ error: 'Name and phone number did not match our records — please look yourself up again.' });
+    const existing = await db.get('SELECT passport_url FROM participants WHERE id=$1', [req.params.id]);
+    const storedPath = await saveFile(req.file, 'participant-passport');
+    await db.run('UPDATE participants SET passport_url=$1 WHERE id=$2', [storedPath, req.params.id]);
+    if (existing && existing.passport_url) await deleteStoredFile(existing.passport_url);
+    res.json({ passport_url: storedPath });
+  } catch (e) {
+    console.error('Public profile Passport upload failed —', e.message);
     res.status(500).json({ error: 'Upload failed: ' + e.message });
   }
 });

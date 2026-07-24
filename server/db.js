@@ -799,6 +799,15 @@ async function initSchema() {
   // business_card_url (R2 URL or /uploads/... path) via uploadHelper.saveFile.
   await pool.query(`ALTER TABLE participants ADD COLUMN IF NOT EXISTS aadhaar_number TEXT;`);
   await pool.query(`ALTER TABLE participants ADD COLUMN IF NOT EXISTS aadhaar_url TEXT;`);
+  // Passport is the alternative identity document for international Delegates
+  // who don't hold an Aadhaar — a Delegate only ever needs to provide ONE of
+  // Aadhaar or Passport (see publicProfile.js's PUT /participant/:id/travel,
+  // which requires at least one complete pair). Same sensitivity/access model
+  // as Aadhaar: passport_number/passport_url are stripped from the admin GET
+  // response for anyone who isn't super_admin, and its upload/remove
+  // endpoints are super_admin-gated the same way.
+  await pool.query(`ALTER TABLE participants ADD COLUMN IF NOT EXISTS passport_number TEXT;`);
+  await pool.query(`ALTER TABLE participants ADD COLUMN IF NOT EXISTS passport_url TEXT;`);
   await pool.query(`ALTER TABLE host_members ADD COLUMN IF NOT EXISTS shirt_size TEXT;`);
   await pool.query(`ALTER TABLE host_members ADD COLUMN IF NOT EXISTS tshirt_size TEXT;`);
   await pool.query(`ALTER TABLE host_members ADD COLUMN IF NOT EXISTS waist_size TEXT;`);
