@@ -789,6 +789,16 @@ async function initSchema() {
   await pool.query(`ALTER TABLE participants ADD COLUMN IF NOT EXISTS waist_size TEXT;`);
   await pool.query(`ALTER TABLE participants ADD COLUMN IF NOT EXISTS photo_url TEXT;`);
   await pool.query(`ALTER TABLE participants ADD COLUMN IF NOT EXISTS business_card_url TEXT;`);
+  // Aadhaar (Government of India ID) collection for Delegates only, added
+  // for on-site identity verification at the registration desk. Aadhaar is
+  // sensitive government-ID data (regulated under India's Aadhaar Act) —
+  // aadhaar_number/aadhaar_url are stripped out of the admin GET /participants
+  // response server-side for anyone who isn't super_admin (see participants.js),
+  // not just hidden in the UI, and the upload/remove/view endpoints for it are
+  // super_admin-gated the same way. Stored the same way as photo_url/
+  // business_card_url (R2 URL or /uploads/... path) via uploadHelper.saveFile.
+  await pool.query(`ALTER TABLE participants ADD COLUMN IF NOT EXISTS aadhaar_number TEXT;`);
+  await pool.query(`ALTER TABLE participants ADD COLUMN IF NOT EXISTS aadhaar_url TEXT;`);
   await pool.query(`ALTER TABLE host_members ADD COLUMN IF NOT EXISTS shirt_size TEXT;`);
   await pool.query(`ALTER TABLE host_members ADD COLUMN IF NOT EXISTS tshirt_size TEXT;`);
   await pool.query(`ALTER TABLE host_members ADD COLUMN IF NOT EXISTS waist_size TEXT;`);

@@ -49,6 +49,7 @@ async function findMatches(name, phone) {
       ? `, address, travel_mode, travel_number, travel_datetime, arrival_point,
          departure_mode, departure_number, departure_datetime, departure_point,
          dietary_preference, drink_preference, special_requests, business_profile,
+         aadhaar_number, aadhaar_url,
          (SELECT ptp.pre_tour_id FROM pre_tour_participants ptp WHERE ptp.participant_id = ${table}.id ORDER BY ptp.id LIMIT 1) AS pre_tour_id`
       : '';
     const rows = await db.all(`
@@ -131,6 +132,19 @@ const TRAVEL_MODES = ['flight', 'train', 'road', 'other'];
 function cleanMode(v) { return TRAVEL_MODES.includes(v) ? v : null; }
 function cleanText(v) { return (v === undefined || v === null || String(v).trim() === '') ? null : String(v).trim(); }
 
+// Aadhaar is mandatory for Delegates — this has to be exactly the 12 digits
+// an Aadhaar number actually has, spaces/dashes stripped first since people
+// commonly write it as "1234 5678 9012". Returns { value, error } rather
+// than throwing so the caller can decide whether to block the whole save
+// (see the PUT handler below, which also requires the document itself —
+// aadhaar_url — to already be on file before it will accept a save).
+function cleanAadhaar(v) {
+  const digits = String(v || '').replace(/\D/g, '');
+  if (!digits) return { value: null, error: 'Aadhaar number is required.' };
+  if (digits.length !== 12) return { value: null, error: 'Aadhaar number must be exactly 12 digits.' };
+  return { value: digits, error: null };
+}
+
 // Same-spirit as admin.js's ensureTransportPoint — auto-registers any new
 // arrival/departure point a delegate types so it shows up as a suggestion in
 // the admin's Transport Planning UI too. Direct SQL rather than calling the
@@ -144,25 +158,40 @@ async function ensurePoint(name) {
   );
 }
 
+// Aadhaar (both the number and the scanned document) is mandatory here —
+// the frontend (mytravel.js) uploads the Aadhaar file BEFORE calling this
+// route specifically so that, by the time this handler runs, aadhaar_url is
+// already set on the row (either from a prior save, or from the upload that
+// just happened seconds ago in the same "Save changes" click). That lets
+// this handler check aadhaar_url the normal way instead of trying to
+// coordinate two separate HTTP requests atomically.
 router.put('/participant/:id/travel', async (req, res) => {
   try {
     const verified = await verifyOwnership('participant', req.params.id, req.body.name, req.body.phone);
     if (!verified) return res.status(403).json({ error: 'Name and phone number did not match our records — please look yourself up again.' });
     const b = req.body;
+    const aadhaar = cleanAadhaar(b.aadhaar_number);
+    if (aadhaar.error) return res.status(400).json({ error: aadhaar.error });
+    const existingDoc = await db.get('SELECT aadhaar_url FROM participants WHERE id=$1', [req.params.id]);
+    if (!existingDoc || !existingDoc.aadhaar_url) {
+      return res.status(400).json({ error: 'Please upload your Aadhaar document (photo or PDF scan) before saving.' });
+    }
     await db.run(`
       UPDATE participants SET
         email=$1,
         address=$2, travel_mode=$3, travel_number=$4, travel_datetime=$5, arrival_point=$6,
         departure_mode=$7, departure_number=$8, departure_datetime=$9, departure_point=$10,
         shirt_size=$11, tshirt_size=$12, waist_size=$13,
-        dietary_preference=$14, drink_preference=$15, special_requests=$16, business_profile=$17
-      WHERE id=$18
+        dietary_preference=$14, drink_preference=$15, special_requests=$16, business_profile=$17,
+        aadhaar_number=$18
+      WHERE id=$19
     `, [
       cleanText(b.email),
       cleanText(b.address), cleanMode(b.travel_mode), cleanText(b.travel_number), cleanText(b.travel_datetime), cleanText(b.arrival_point),
       cleanMode(b.departure_mode), cleanText(b.departure_number), cleanText(b.departure_datetime), cleanText(b.departure_point),
       cleanText(b.shirt_size), cleanText(b.tshirt_size), cleanText(b.waist_size),
       cleanText(b.dietary_preference), cleanText(b.drink_preference), cleanText(b.special_requests), cleanText(b.business_profile),
+      aadhaar.value,
       req.params.id
     ]);
     await Promise.all([ensurePoint(b.arrival_point), ensurePoint(b.departure_point)]);
@@ -255,6 +284,27 @@ router.post('/:type/:id/business-card', handleUpload(), async (req, res) => {
     res.json({ business_card_url: storedPath });
   } catch (e) {
     console.error('Public profile business card upload failed —', e.message);
+    res.status(500).json({ error: 'Upload failed: ' + e.message });
+  }
+});
+
+// POST /participant/:id/aadhaar — multipart form with fields: name, phone, file.
+// Delegate-only (aadhaar_url only exists on `participants`), same
+// unauthenticated re-verification as every other mutation on this route.
+// Accepts a PDF scan as well as an image — handleUpload()'s multer instance
+// only caps file size, it doesn't restrict mimetype.
+router.post('/participant/:id/aadhaar', handleUpload(), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'file is required' });
+  try {
+    const verified = await verifyOwnership('participant', req.params.id, req.body.name, req.body.phone);
+    if (!verified) return res.status(403).json({ error: 'Name and phone number did not match our records — please look yourself up again.' });
+    const existing = await db.get('SELECT aadhaar_url FROM participants WHERE id=$1', [req.params.id]);
+    const storedPath = await saveFile(req.file, 'participant-aadhaar');
+    await db.run('UPDATE participants SET aadhaar_url=$1 WHERE id=$2', [storedPath, req.params.id]);
+    if (existing && existing.aadhaar_url) await deleteStoredFile(existing.aadhaar_url);
+    res.json({ aadhaar_url: storedPath });
+  } catch (e) {
+    console.error('Public profile Aadhaar upload failed —', e.message);
     res.status(500).json({ error: 'Upload failed: ' + e.message });
   }
 });

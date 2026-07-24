@@ -167,6 +167,15 @@ router.get('/', async (req, res) => {
           ${SPOC_JOIN}
           ORDER BY p.created_at DESC
         `);
+    // Aadhaar is sensitive government-ID data — strip it out of the response
+    // itself (not just hide it in the admin UI) for anyone who isn't a super
+    // admin. This route is also reachable by volunteers granted the
+    // "Delegate Registrations" module (see index.js's /api/portal-modules/
+    // participants mount), so this check is what actually keeps it private,
+    // not the admin.js rendering layer.
+    if (!req.user || req.user.role !== 'super_admin') {
+      rows.forEach((r) => { delete r.aadhaar_number; delete r.aadhaar_url; });
+    }
     res.json(rows);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -352,10 +361,11 @@ router.put('/:id/spoc', async (req, res) => {
 });
 
 router.delete('/:id', async (req, res) => {
-  const existing = await db.get('SELECT name, photo_url, business_card_url FROM participants WHERE id=$1', [req.params.id]);
+  const existing = await db.get('SELECT name, photo_url, business_card_url, aadhaar_url FROM participants WHERE id=$1', [req.params.id]);
   if (existing) {
     await deleteStoredFile(existing.photo_url);
     await deleteStoredFile(existing.business_card_url);
+    await deleteStoredFile(existing.aadhaar_url);
   }
   await deleteChecklistForOwner('participant', req.params.id);
   await db.run('DELETE FROM participants WHERE id=$1', [req.params.id]);
@@ -432,6 +442,57 @@ router.delete('/:id/business-card', async (req, res) => {
     if (!existing) return res.status(404).json({ error: 'Delegate not found' });
     await db.run('UPDATE participants SET business_card_url=NULL WHERE id=$1', [req.params.id]);
     if (existing.business_card_url) await deleteStoredFile(existing.business_card_url);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// Aadhaar (Government ID) document — same upload mechanism as photo/business
+// card, but gated to super_admin only (not just any admin/volunteer this
+// router is reachable by) given how sensitive this document is. Accepts
+// image/* AND application/pdf — Aadhaar is very often shared as a PDF scan
+// (uploadImage itself doesn't restrict mimetype, only size, so no change
+// needed there).
+function requireSuperAdminHere(req, res) {
+  if (!req.user || req.user.role !== 'super_admin') {
+    res.status(403).json({ error: 'Only a super admin can view or manage Aadhaar documents.' });
+    return false;
+  }
+  return true;
+}
+
+router.post('/:id/aadhaar', (req, res, next) => {
+  if (!requireSuperAdminHere(req, res)) return;
+  uploadImage.single('file')(req, res, (err) => {
+    if (err) {
+      const friendly = err.code === 'LIMIT_FILE_SIZE' ? 'File is too large (max 10MB).' : 'Upload was interrupted — please try again.';
+      return res.status(400).json({ error: friendly });
+    }
+    next();
+  });
+}, async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'file is required' });
+  try {
+    const existing = await db.get('SELECT aadhaar_url FROM participants WHERE id=$1', [req.params.id]);
+    if (!existing) return res.status(404).json({ error: 'Delegate not found' });
+    const storedPath = await saveFile(req.file, 'participant-aadhaar');
+    await db.run('UPDATE participants SET aadhaar_url=$1 WHERE id=$2', [storedPath, req.params.id]);
+    if (existing.aadhaar_url) await deleteStoredFile(existing.aadhaar_url);
+    res.json({ aadhaar_url: storedPath });
+  } catch (e) {
+    console.error('Delegate Aadhaar upload failed —', e.message);
+    res.status(500).json({ error: 'Upload failed: ' + e.message });
+  }
+});
+
+router.delete('/:id/aadhaar', async (req, res) => {
+  if (!requireSuperAdminHere(req, res)) return;
+  try {
+    const existing = await db.get('SELECT aadhaar_url FROM participants WHERE id=$1', [req.params.id]);
+    if (!existing) return res.status(404).json({ error: 'Delegate not found' });
+    await db.run('UPDATE participants SET aadhaar_url=NULL WHERE id=$1', [req.params.id]);
+    if (existing.aadhaar_url) await deleteStoredFile(existing.aadhaar_url);
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
