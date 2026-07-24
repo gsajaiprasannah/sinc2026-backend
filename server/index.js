@@ -90,10 +90,14 @@ app.use('/api', (req, res, next) => {
 app.use('/api/participants', requireAdminRole, require('./routes/participants'));
 app.use('/api/registrations', requireAdminRole, require('./routes/registrations'));
 app.use('/api/export', requireAdminRole, require('./routes/export'));
-// Staff-only half of the QR badge feature (room/vehicle/payment details +
-// Mark Attendance) — same protection level as participants/registrations
-// above, since it surfaces the same class of internal data.
-app.use('/api/badge', requireAdminRole, require('./routes/badge').staffRouter);
+// Staff half of the QR badge feature — any logged-in login can reach these
+// routes (requireAuth, not requireAdminRole), because scan duties are now
+// assignable to non-admin logins too (host_member/volunteer/driver/
+// transporter deputised for a scan_point, or a stall_owner login). Each
+// route inside badge.js still computes and enforces that specific login's
+// own caps before returning anything sensitive or performing a scan — see
+// computeCaps() in server/routes/badge.js.
+app.use('/api/badge', requireAuth, require('./routes/badge').staffRouter);
 
 // --- Host club module — host member directory, committees, delegate ---
 // --- assistance assignments, and their checklist/milestones. All internal ---

@@ -1349,6 +1349,55 @@ async function initSchema() {
   await pool.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;`);
   await pool.query(`ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('super_admin','admin','host_member','media','transporter','driver','volunteer','vendor'));`);
 
+  // --- QR badge multi-point scanning ---
+  // Every gate/desk that scans a delegate/host-member's QR badge (hotel desk,
+  // transport boarding, food counter, an exhibitor's stall, goods delivery)
+  // needs to know two things about the person doing the scanning: (1) which
+  // duty they're covering, and (2) — for the "correct vehicle?" transport
+  // check specifically — which vehicle they themselves are stationed at
+  // today. Neither fits the existing per-role linked-record columns
+  // (host_member_id/driver_id/partner_id/...) because the SAME login (e.g. a
+  // host member or volunteer) might be handed hotel-desk duty one day and
+  // food-counter duty the next, and a driver/transporter's vehicle for
+  // scanning purposes is a day-to-day assignment, not a fixed attribute of
+  // their profile. So both live directly on `users`, settable independently
+  // of role from the admin panel's Generate Login / Change Role forms.
+  //   scan_point: an ADDITIONAL duty grant on top of whatever the login's
+  //     role already implies (admin/super_admin implicitly get every scan
+  //     point; driver/transporter implicitly get 'transport' via vehicle_id
+  //     below) — lets any host_member/volunteer login be deputised for a
+  //     specific gate without changing their base role.
+  //   vehicle_id: which vehicle this login is scanning boarding passengers
+  //     for today (used by the transport-scan endpoint in badge.js to flag
+  //     "wrong vehicle" if the vehicle the entity is actually booked on
+  //     differs from this one).
+  //   stall_id: which stall_bookings row a 'stall_owner' login represents —
+  //     see ALL_ROLES/LINKED_ROLE_FIELDS in server/routes/auth.js.
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS scan_point TEXT;`);
+  await pool.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_scan_point_check;`);
+  await pool.query(`ALTER TABLE users ADD CONSTRAINT users_scan_point_check CHECK (scan_point IS NULL OR scan_point IN ('hotel_desk','transport','food_counter','inventory'));`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS vehicle_id INTEGER REFERENCES vehicles(id) ON DELETE SET NULL;`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS stall_id INTEGER REFERENCES stall_bookings(id) ON DELETE SET NULL;`);
+  await pool.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;`);
+  await pool.query(`ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('super_admin','admin','host_member','media','transporter','driver','volunteer','vendor','stall_owner'));`);
+
+  // attendance_log started life as gate-only "Mark Attendance" (see its
+  // original CREATE TABLE below — every row was implicitly a gate check-in).
+  // scan_point widens it into the single history for EVERY kind of badge
+  // scan (gate/hotel_checkin/hotel_checkout/transport/food_counter/stall/
+  // goodies), each still recording checked_in_by_user_id — i.e. who did the
+  // scanning — which is what makes "who scanned whom, and when" queryable
+  // (see the /api/badge/scan-history and /api/badge/my-scans routes in
+  // badge.js). meta carries action-specific detail that doesn't deserve its
+  // own column (which meal slot, which trip/vehicle a transport-scan
+  // matched or missed, which goodies distribution row a delivery closed).
+  await pool.query(`ALTER TABLE attendance_log ADD COLUMN IF NOT EXISTS scan_point TEXT NOT NULL DEFAULT 'gate';`);
+  await pool.query(`ALTER TABLE attendance_log DROP CONSTRAINT IF EXISTS attendance_log_scan_point_check;`);
+  await pool.query(`ALTER TABLE attendance_log ADD CONSTRAINT attendance_log_scan_point_check CHECK (scan_point IN ('gate','hotel_checkin','hotel_checkout','transport','food_counter','stall','goodies'));`);
+  await pool.query(`ALTER TABLE attendance_log ADD COLUMN IF NOT EXISTS meta JSONB;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS attendance_log_scan_point_idx ON attendance_log(scan_point);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS attendance_log_scanner_idx ON attendance_log(checked_in_by_user_id);`);
+
   // money). Recreated on every boot (CREATE OR REPLACE) so adding a new
   // source later is just one more UNION branch.
   await pool.query(`
