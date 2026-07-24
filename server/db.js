@@ -642,8 +642,17 @@ async function initSchema() {
   // 'transporter'/'driver'/'volunteer') were added to the CHECK constraint
   // need it relaxed, since Postgres won't alter CHECK constraints in place —
   // drop and recreate.
+  // NOTE: intermediate migrations below re-narrow this same constraint as
+  // each role was added historically. That's fine on a fresh database, but
+  // on THIS already-running database rows with 'stall_owner'/'scanner' roles
+  // already exist (added by later migrations further down this file) — so
+  // every one of these intermediate DROP+ADD steps must already include the
+  // FULL current role list, or Postgres refuses to add the narrower
+  // constraint against existing rows and initSchema() throws, crashing
+  // startup. Keep every occurrence of this constraint in sync with the final
+  // one at the bottom of this file.
   await pool.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;`);
-  await pool.query(`ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('super_admin','admin','host_member','media','transporter','driver','volunteer','vendor'));`);
+  await pool.query(`ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('super_admin','admin','host_member','media','transporter','driver','volunteer','vendor','stall_owner','scanner'));`);
 
   // Older databases created before 'congress_only' was added to reg_type need
   // the CHECK constraint relaxed (Postgres won't alter CHECK constraints in
@@ -1346,8 +1355,11 @@ async function initSchema() {
   // role, scoped to a single vendors row via requireVendorRole in
   // vendorPortal.js (same self-scoping pattern as transporterPortal.js).
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS vendor_id INTEGER REFERENCES vendors(id) ON DELETE SET NULL;`);
+  // See the "intermediate migrations" note near the first users_role_check
+  // ALTER above — kept in sync with the full current role list for the same
+  // reason (existing 'stall_owner'/'scanner' rows must not be rejected here).
   await pool.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;`);
-  await pool.query(`ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('super_admin','admin','host_member','media','transporter','driver','volunteer','vendor'));`);
+  await pool.query(`ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('super_admin','admin','host_member','media','transporter','driver','volunteer','vendor','stall_owner','scanner'));`);
 
   // --- QR badge multi-point scanning ---
   // Every gate/desk that scans a delegate/host-member's QR badge (hotel desk,
@@ -1374,12 +1386,20 @@ async function initSchema() {
   //   stall_id: which stall_bookings row a 'stall_owner' login represents —
   //     see ALL_ROLES/LINKED_ROLE_FIELDS in server/routes/auth.js.
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS scan_point TEXT;`);
+  // Kept in sync with the full scan_point list (including 'registration',
+  // added by a later migration further down this file) for the same reason
+  // as users_role_check above — existing 'registration'-scan_point rows must
+  // not be rejected by this intermediate step.
   await pool.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_scan_point_check;`);
-  await pool.query(`ALTER TABLE users ADD CONSTRAINT users_scan_point_check CHECK (scan_point IS NULL OR scan_point IN ('hotel_desk','transport','food_counter','inventory'));`);
+  await pool.query(`ALTER TABLE users ADD CONSTRAINT users_scan_point_check CHECK (scan_point IS NULL OR scan_point IN ('hotel_desk','transport','food_counter','inventory','registration'));`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS vehicle_id INTEGER REFERENCES vehicles(id) ON DELETE SET NULL;`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS stall_id INTEGER REFERENCES stall_bookings(id) ON DELETE SET NULL;`);
+  // See the "intermediate migrations" note near the first users_role_check
+  // ALTER above — kept in sync with the full current role list (including
+  // 'scanner', added by a later migration further down this file) so this
+  // step never rejects existing 'scanner'-role rows.
   await pool.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;`);
-  await pool.query(`ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('super_admin','admin','host_member','media','transporter','driver','volunteer','vendor','stall_owner'));`);
+  await pool.query(`ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('super_admin','admin','host_member','media','transporter','driver','volunteer','vendor','stall_owner','scanner'));`);
 
   // attendance_log started life as gate-only "Mark Attendance" (see its
   // original CREATE TABLE below — every row was implicitly a gate check-in).
