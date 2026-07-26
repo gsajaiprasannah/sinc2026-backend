@@ -1595,6 +1595,17 @@ async function initSchema() {
   await pool.query(`ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('super_admin','admin','host_member','media','transporter','driver','volunteer','vendor','stall_owner','scanner'));`);
   await pool.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_scan_point_check;`);
   await pool.query(`ALTER TABLE users ADD CONSTRAINT users_scan_point_check CHECK (scan_point IS NULL OR scan_point IN ('hotel_desk','transport','food_counter','inventory','registration'));`);
+
+  // --- Vehicle types expanded beyond van/car/bus ------------------------
+  // The Vehicles master now offers 6 specific types instead of 3 generic
+  // ones — Sedan effectively replaces "car" as the ground-transport default,
+  // so 'car' is kept in the allowed set (not removed) purely so any vehicle
+  // rows already saved with that old type don't fail this constraint; the
+  // Add/Edit Vehicle form (admin.html) no longer offers 'car' as a choice
+  // going forward. See server/routes/vehicles.js's TYPE_PREFIX map for the
+  // per-type auto-generated code prefix (C/U/F/A/S/O).
+  await pool.query(`ALTER TABLE vehicles DROP CONSTRAINT IF EXISTS vehicles_vehicle_type_check;`);
+  await pool.query(`ALTER TABLE vehicles ADD CONSTRAINT vehicles_vehicle_type_check CHECK (vehicle_type IN ('sedan','suv','force_traveller','bus','van','others','car'));`);
 }
 
 module.exports = { pool, all, get, run, transaction, initSchema };

@@ -5,9 +5,15 @@ const { logActivity } = require('../lib/activityLogger');
 const router = express.Router();
 
 // Vehicle identification codes: a one-letter type prefix + a zero-padded
-// sequence number, unique per type — e.g. van #1 is S001, car #1 is C001,
-// bus #1 is A001. S = shuttle van, C = car, A = coAch/bus.
-const TYPE_PREFIX = { van: 'S', car: 'C', bus: 'A' };
+// sequence number, unique per type — e.g. van #1 is S001, sedan #1 is
+// C001, bus #1 is A001. S = shuttle van, C = car (Sedan takes over the old
+// "car" prefix, since it's effectively the modern equivalent), A = coAch/
+// bus, U = sUv, F = Force traveller, O = Others. 'car' itself is no longer
+// selectable here (see db.js's CHECK constraint comment for why it's still
+// allowed at the DB level) — any legacy 'car' vehicle just keeps its
+// existing code and won't be affected by this map.
+const TYPE_PREFIX = { sedan: 'C', suv: 'U', force_traveller: 'F', bus: 'A', van: 'S', others: 'O' };
+const VALID_TYPES_MSG = 'vehicle_type must be sedan, suv, force_traveller, bus, van, or others';
 function formatVehicleCode(type, n) {
   const prefix = TYPE_PREFIX[type];
   if (!prefix) throw new Error(`Unknown vehicle type "${type}"`);
@@ -41,7 +47,7 @@ router.get('/', async (req, res) => {
 router.get('/next-code', async (req, res) => {
   try {
     const type = (req.query.type || '').toLowerCase();
-    if (!TYPE_PREFIX[type]) return res.status(400).json({ error: 'type must be van, car, or bus' });
+    if (!TYPE_PREFIX[type]) return res.status(400).json({ error: VALID_TYPES_MSG });
     const vehicle_code = await computeNextVehicleCode(db, type);
     res.json({ vehicle_code });
   } catch (e) {
@@ -66,7 +72,7 @@ router.get('/partners-lite', async (req, res) => {
 router.post('/', async (req, res) => {
   let { vehicle_code, vehicle_type, model, seating_capacity, registration_number, partner_id, notes } = req.body;
   vehicle_type = (vehicle_type || '').toLowerCase();
-  if (!TYPE_PREFIX[vehicle_type]) return res.status(400).json({ error: 'vehicle_type must be van, car, or bus' });
+  if (!TYPE_PREFIX[vehicle_type]) return res.status(400).json({ error: VALID_TYPES_MSG });
   try {
     const result = await db.transaction(async (tx) => {
       // Advisory lock (distinct from the one registrations.js uses) so two
