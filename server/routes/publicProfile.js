@@ -55,7 +55,7 @@ async function findMatches(name, phone) {
       // accommodation one, on my-profile.html — returned here so that form
       // can prefill what they've already told us.
       : `, dietary_preference, drink_preference, special_requests,
-         hotel_stay_required, hotel_stay_notes`;
+         hotel_stay_required, hotel_stay_notes, logo_url`;
     const rows = await db.all(`
       SELECT id, name, email, shirt_size, tshirt_size, waist_size, photo_url, business_card_url${extraCols}
       FROM ${table}
@@ -338,6 +338,31 @@ router.post('/:type/:id/business-card', handleUpload(), async (req, res) => {
     res.json({ business_card_url: storedPath });
   } catch (e) {
     console.error('Public profile business card upload failed —', e.message);
+    res.status(500).json({ error: 'Upload failed: ' + e.message });
+  }
+});
+
+// POST /:type/:id/logo — the member's own company logo. Same shape as the
+// business-card upload above; kept separate rather than overloading that one
+// because a firm's logo and a scan of a business card serve different
+// purposes and both are worth having on file.
+router.post('/:type/:id/logo', handleUpload(), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'file is required' });
+  // Only host members and volunteers carry a logo_url column — delegates
+  // don't, so reject rather than let the UPDATE fail with a SQL error.
+  if (!['host_member', 'volunteer'].includes(req.params.type)) {
+    return res.status(400).json({ error: 'A company logo can only be added to a Host Member or Volunteer record.' });
+  }
+  try {
+    const verified = await verifyOwnership(req.params.type, req.params.id, req.body.name, req.body.phone);
+    if (!verified) return res.status(403).json({ error: 'Name and phone number did not match our records — please look yourself up again.' });
+    const existing = await db.get(`SELECT logo_url FROM ${verified.table} WHERE id=$1`, [req.params.id]);
+    const storedPath = await saveFile(req.file, `${req.params.type}-logos`);
+    await db.run(`UPDATE ${verified.table} SET logo_url=$1 WHERE id=$2`, [storedPath, req.params.id]);
+    if (existing && existing.logo_url) await deleteStoredFile(existing.logo_url);
+    res.json({ logo_url: storedPath });
+  } catch (e) {
+    console.error('Public profile logo upload failed —', e.message);
     res.status(500).json({ error: 'Upload failed: ' + e.message });
   }
 });

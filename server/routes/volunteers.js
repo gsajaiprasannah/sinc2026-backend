@@ -145,10 +145,13 @@ router.put('/:id', async (req, res) => {
 });
 
 router.delete('/:id', async (req, res) => {
-  const existing = await db.get('SELECT name, photo_url, business_card_url FROM volunteers WHERE id=$1', [req.params.id]);
+  const existing = await db.get('SELECT name, photo_url, business_card_url, logo_url FROM volunteers WHERE id=$1', [req.params.id]);
   if (existing) {
     await deleteStoredFile(existing.photo_url);
     await deleteStoredFile(existing.business_card_url);
+    // Company logo, uploaded from my-profile.html — cleaned up here too so
+    // deleting a record doesn't orphan the file in storage.
+    await deleteStoredFile(existing.logo_url);
   }
   await db.run('DELETE FROM volunteers WHERE id=$1', [req.params.id]);
   logActivity(req.user, { action: 'delete', entityType: 'volunteer', entityId: Number(req.params.id), label: existing?.name });

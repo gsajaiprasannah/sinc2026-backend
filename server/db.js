@@ -1624,6 +1624,11 @@ async function initSchema() {
     await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS special_requests TEXT;`);
     await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS hotel_stay_required BOOLEAN NOT NULL DEFAULT false;`);
     await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS hotel_stay_notes TEXT;`);
+    // The member's own company logo, uploaded from my-profile.html next to
+    // their photo and business card. Stored the same way as sponsors.logo_url
+    // (an R2 https:// URL, or a local /uploads path in dev) — see
+    // server/uploadHelper.js.
+    await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS logo_url TEXT;`);
   }
 }
 
