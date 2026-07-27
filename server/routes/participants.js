@@ -3,8 +3,9 @@ const multer = require('multer');
 const { parse } = require('csv-parse/sync');
 const db = require('../db');
 const { attachChecklistRoutes, deleteChecklistForOwner } = require('./checklistHelper');
-const { saveFile, deleteStoredFile } = require('../uploadHelper');
+const { saveFile, deleteStoredFile, readStoredFile, storedFileExt } = require('../uploadHelper');
 const { logActivity } = require('../lib/activityLogger');
+const { createZip, zipSafeName } = require('../lib/zip');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -610,6 +611,64 @@ router.post('/bulk-upload', upload.single('file'), async (req, res) => {
     res.json({ ok: true, imported, skipped: skipped.length, duplicates: skipped });
   } catch (e) {
     res.status(400).json({ error: 'Failed to parse/import CSV: ' + e.message });
+  }
+});
+
+// --- Bulk document download -------------------------------------------
+// POST /documents-zip { docs: ['aadhaar','passport','photo','business_card'] }
+// Returns one ZIP with a folder per document type. Zipped server-side rather
+// than in the browser because R2 serves no CORS headers to sinc2026.com, so
+// the page can't fetch the files itself.
+//
+// Aadhaar and passport scans are super-admin-only everywhere else in this
+// file (see requireSuperAdminHere and the GET redaction above); the same gate
+// applies here, or this route would be a way around it.
+const PARTICIPANT_DOC_TYPES = {
+  aadhaar: { column: 'aadhaar_url', folder: 'Aadhaar', superAdminOnly: true },
+  passport: { column: 'passport_url', folder: 'Passport', superAdminOnly: true },
+  photo: { column: 'photo_url', folder: 'Photos', superAdminOnly: false },
+  business_card: { column: 'business_card_url', folder: 'Business Cards', superAdminOnly: false },
+};
+router.post('/documents-zip', async (req, res) => {
+  const requested = Array.isArray(req.body.docs) ? req.body.docs : [];
+  const types = requested.filter((d) => PARTICIPANT_DOC_TYPES[d]);
+  if (!types.length) return res.status(400).json({ error: 'Pick at least one document type to download.' });
+  if (types.some((d) => PARTICIPANT_DOC_TYPES[d].superAdminOnly) && (!req.user || req.user.role !== 'super_admin')) {
+    return res.status(403).json({ error: 'Only a super admin can download Aadhaar or passport documents.' });
+  }
+  try {
+    const cols = types.map((d) => PARTICIPANT_DOC_TYPES[d].column).join(', ');
+    const rows = await db.all(`
+      SELECT p.id, p.name, p.participant_code, c.name AS club_name, ${cols}
+      FROM participants p LEFT JOIN clubs c ON c.id = p.club_id
+      ORDER BY c.name, p.name
+    `);
+    const entries = [];
+    const missing = [];
+    for (const r of rows) {
+      for (const d of types) {
+        const { column, folder } = PARTICIPANT_DOC_TYPES[d];
+        if (!r[column]) continue;
+        const data = await readStoredFile(r[column]);
+        if (!data) { missing.push(`${r.name} (${d})`); continue; }
+        // Club/Name-Code keeps the ZIP browsable and sorts the way the
+        // congress team works — by club, then person.
+        const label = zipSafeName(`${r.name}${r.participant_code ? ' - ' + r.participant_code : ''}`);
+        entries.push({ name: `${folder}/${zipSafeName(r.club_name || 'No club')}/${label}${storedFileExt(r[column])}`, data });
+      }
+    }
+    if (!entries.length) return res.status(404).json({ error: 'No documents of that type have been uploaded yet.' });
+    logActivity(req.user, { action: 'export', entityType: 'participant', label: `${entries.length} document(s) as ZIP`, details: types.join(', ') });
+    const zip = createZip(entries);
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="delegate-documents.zip"`);
+    // Surfaced in the UI so a silent partial export is impossible.
+    res.setHeader('X-Document-Count', String(entries.length));
+    if (missing.length) res.setHeader('X-Missing-Count', String(missing.length));
+    res.send(zip);
+  } catch (e) {
+    console.error('Delegate document ZIP failed —', e.message);
+    res.status(500).json({ error: 'Could not build the ZIP: ' + e.message });
   }
 });
 

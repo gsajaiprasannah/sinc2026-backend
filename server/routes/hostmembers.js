@@ -3,8 +3,9 @@ const multer = require('multer');
 const { parse } = require('csv-parse/sync');
 const db = require('../db');
 const { attachChecklistRoutes, deleteChecklistForOwner } = require('./checklistHelper');
-const { saveFile, deleteStoredFile } = require('../uploadHelper');
+const { saveFile, deleteStoredFile, readStoredFile, storedFileExt } = require('../uploadHelper');
 const { logActivity } = require('../lib/activityLogger');
+const { createZip, zipSafeName } = require('../lib/zip');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -282,6 +283,52 @@ router.post('/bulk-upload', upload.single('file'), async (req, res) => {
     res.json({ ok: true, imported: inserted, updated });
   } catch (e) {
     res.status(400).json({ error: 'Failed to parse/import CSV: ' + e.message });
+  }
+});
+
+// --- Bulk document download -------------------------------------------
+// POST /documents-zip { docs: ['photo','business_card','logo'] }
+// Mirrors the Delegates version in participants.js — see that route for why
+// this is zipped server-side rather than in the browser. Host members carry
+// no identity documents (no Aadhaar/passport columns on this table), so
+// nothing here is super-admin gated.
+const HOST_MEMBER_DOC_TYPES = {
+  photo: { column: 'photo_url', folder: 'Photos' },
+  business_card: { column: 'business_card_url', folder: 'Business Cards' },
+  logo: { column: 'logo_url', folder: 'Company Logos' },
+};
+router.post('/documents-zip', async (req, res) => {
+  const requested = Array.isArray(req.body.docs) ? req.body.docs : [];
+  const types = requested.filter((d) => HOST_MEMBER_DOC_TYPES[d]);
+  if (!types.length) return res.status(400).json({ error: 'Pick at least one document type to download.' });
+  try {
+    const cols = types.map((d) => HOST_MEMBER_DOC_TYPES[d].column).join(', ');
+    const rows = await db.all(`SELECT id, name, company, ${cols} FROM host_members ORDER BY name`);
+    const entries = [];
+    const missing = [];
+    for (const r of rows) {
+      for (const d of types) {
+        const { column, folder } = HOST_MEMBER_DOC_TYPES[d];
+        if (!r[column]) continue;
+        const data = await readStoredFile(r[column]);
+        if (!data) { missing.push(`${r.name} (${d})`); continue; }
+        // Company is included on logos so a folder of them is identifiable
+        // without opening each one.
+        const label = zipSafeName(d === 'logo' && r.company ? `${r.company} - ${r.name}` : r.name);
+        entries.push({ name: `${folder}/${label}${storedFileExt(r[column])}`, data });
+      }
+    }
+    if (!entries.length) return res.status(404).json({ error: 'No documents of that type have been uploaded yet.' });
+    logActivity(req.user, { action: 'export', entityType: 'host_member', label: `${entries.length} document(s) as ZIP`, details: types.join(', ') });
+    const zip = createZip(entries);
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="host-member-documents.zip"`);
+    res.setHeader('X-Document-Count', String(entries.length));
+    if (missing.length) res.setHeader('X-Missing-Count', String(missing.length));
+    res.send(zip);
+  } catch (e) {
+    console.error('Host member document ZIP failed —', e.message);
+    res.status(500).json({ error: 'Could not build the ZIP: ' + e.message });
   }
 });
 

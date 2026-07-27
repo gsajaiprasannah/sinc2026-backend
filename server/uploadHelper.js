@@ -92,4 +92,39 @@ async function deleteStoredFile(storedPath) {
   }
 }
 
-module.exports = { R2_ENABLED, UPLOAD_ROOT, saveFile, deleteStoredFile, safeName, s3Client, S3Cmds };
+// Reads a previously-stored file back as a Buffer, whichever backend it
+// lives on. Used by the bulk "download these documents as a ZIP" routes —
+// the browser can't fetch R2 objects itself (the bucket serves no CORS
+// headers to sinc2026.com), so the server pulls the bytes and zips them.
+// Returns null rather than throwing when a file is missing, so one dead link
+// in a 176-row export doesn't abort the whole download; callers report the
+// misses instead.
+async function readStoredFile(storedPath) {
+  if (!storedPath) return null;
+  try {
+    if (/^https?:\/\//.test(storedPath)) {
+      if (!R2_ENABLED) return null;
+      const key = storedPath.replace(process.env.R2_PUBLIC_URL_BASE.replace(/\/$/, '') + '/', '');
+      const obj = await s3Client.send(new S3Cmds.GetObjectCommand({ Bucket: process.env.R2_BUCKET, Key: key }));
+      const chunks = [];
+      for await (const chunk of obj.Body) chunks.push(chunk);
+      return Buffer.concat(chunks);
+    }
+    if (storedPath.startsWith('/uploads/')) {
+      const filePath = path.join(__dirname, '..', 'public', storedPath);
+      return fs.readFileSync(filePath);
+    }
+  } catch (e) {
+    console.error('readStoredFile failed for', storedPath, '—', e.message);
+  }
+  return null;
+}
+
+// File extension implied by a stored path, defaulting to .bin so a file with
+// no recognisable extension still lands in the ZIP with a usable name.
+function storedFileExt(storedPath) {
+  const m = String(storedPath || '').match(/\.([a-zA-Z0-9]{1,5})(?:\?|$)/);
+  return m ? '.' + m[1].toLowerCase() : '.bin';
+}
+
+module.exports = { R2_ENABLED, UPLOAD_ROOT, saveFile, deleteStoredFile, readStoredFile, storedFileExt, safeName, s3Client, S3Cmds };
