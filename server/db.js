@@ -1646,6 +1646,20 @@ async function initSchema() {
   await pool.query(`ALTER TABLE registrations ADD COLUMN IF NOT EXISTS registration_category TEXT;`);
   await pool.query(`ALTER TABLE registrations DROP CONSTRAINT IF EXISTS registrations_category_check;`);
   await pool.query(`ALTER TABLE registrations ADD CONSTRAINT registrations_category_check CHECK (registration_category IS NULL OR registration_category IN ('early_bird_full','early_bird_congress_only','regular_full','regular_congress_only'));`);
+
+  // --- Post-tours ---------------------------------------------------------
+  // A post-tour is the same thing as a pre-tour in every respect that the
+  // schema cares about — it has dates, a hotel plan, a day-wise itinerary,
+  // signups and transport trips. Rather than a parallel set of five tables
+  // (and a parallel set of routes, PDFs and UI), pre_tours gains a type
+  // discriminator. Everything keyed on pre_tour_id keeps working untouched.
+  // Defaults to 'pre' so every existing tour stays exactly what it was.
+  await pool.query(`ALTER TABLE pre_tours ADD COLUMN IF NOT EXISTS tour_type TEXT NOT NULL DEFAULT 'pre';`);
+  await pool.query(`ALTER TABLE pre_tours DROP CONSTRAINT IF EXISTS pre_tours_tour_type_check;`);
+  await pool.query(`ALTER TABLE pre_tours ADD CONSTRAINT pre_tours_tour_type_check CHECK (tour_type IN ('pre','post'));`);
+  // Itinerary items gain a free-text duration/notes field so a day can carry
+  // real detail ("2 hrs, includes guided walk") beyond a single time stamp.
+  await pool.query(`ALTER TABLE pre_tour_itinerary ADD COLUMN IF NOT EXISTS duration TEXT;`);
 }
 
 module.exports = { pool, all, get, run, transaction, initSchema };

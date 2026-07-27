@@ -5,15 +5,20 @@ const { logActivity } = require('../lib/activityLogger');
 
 const router = express.Router();
 
+// ?type=pre|post filters to one kind of tour; omitting it returns both,
+// which is what the Delegates form's pre-tour dropdown and the stats
+// dashboard still want.
 router.get('/', async (req, res) => {
   try {
+    const type = req.query.type === 'post' ? 'post' : (req.query.type === 'pre' ? 'pre' : null);
     const rows = await db.all(`
       SELECT pt.*,
         (SELECT COUNT(*) FROM pre_tour_participants pp WHERE pp.pre_tour_id = pt.id) AS participant_count,
         (SELECT COUNT(*) FROM transport_trips t WHERE t.pre_tour_id = pt.id) AS trip_count
       FROM pre_tours pt
+      ${type ? 'WHERE pt.tour_type = $1' : ''}
       ORDER BY pt.start_date NULLS LAST, pt.id
-    `);
+    `, type ? [type] : []);
     res.json(rows);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -115,14 +120,15 @@ router.get('/:id', async (req, res) => {
 });
 
 router.post('/', async (req, res) => {
-  const { name, start_date, end_date, hotel, attractions, description, capacity, price, status, notes } = req.body;
+  const { name, start_date, end_date, hotel, attractions, description, capacity, price, status, notes, tour_type } = req.body;
   if (!name) return res.status(400).json({ error: 'name is required' });
   try {
     const result = await db.run(`
-      INSERT INTO pre_tours (name, start_date, end_date, hotel, attractions, description, capacity, price, status, notes)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id
+      INSERT INTO pre_tours (name, start_date, end_date, hotel, attractions, description, capacity, price, status, notes, tour_type)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id
     `, [name, start_date || null, end_date || null, hotel || '', attractions || '', description || '',
-        capacity ? Number(capacity) : null, price ? Number(price) : null, status || 'planned', notes || '']);
+        capacity ? Number(capacity) : null, price ? Number(price) : null, status || 'planned', notes || '',
+        tour_type === 'post' ? 'post' : 'pre']);
     logActivity(req.user, { action: 'create', entityType: 'pre_tour', entityId: result.id, label: name });
     res.json({ id: result.id });
   } catch (e) {
@@ -131,18 +137,20 @@ router.post('/', async (req, res) => {
 });
 
 router.put('/:id', async (req, res) => {
-  const { name, start_date, end_date, hotel, attractions, description, capacity, price, status, notes } = req.body;
+  const { name, start_date, end_date, hotel, attractions, description, capacity, price, status, notes, tour_type } = req.body;
   try {
     await db.run(`
       UPDATE pre_tours SET
         name=COALESCE($1,name), start_date=COALESCE($2,start_date), end_date=COALESCE($3,end_date),
         hotel=COALESCE($4,hotel), attractions=COALESCE($5,attractions), description=COALESCE($6,description),
-        capacity=COALESCE($7,capacity), price=COALESCE($8,price), status=COALESCE($9,status), notes=COALESCE($10,notes)
+        capacity=COALESCE($7,capacity), price=COALESCE($8,price), status=COALESCE($9,status), notes=COALESCE($10,notes),
+        tour_type=COALESCE($12,tour_type)
       WHERE id=$11
     `, [name || null, start_date || null, end_date || null, hotel !== undefined ? hotel : null,
         attractions !== undefined ? attractions : null, description !== undefined ? description : null,
         capacity !== undefined ? Number(capacity) : null, price !== undefined ? Number(price) : null,
-        status || null, notes !== undefined ? notes : null, req.params.id]);
+        status || null, notes !== undefined ? notes : null, req.params.id,
+        tour_type === 'post' ? 'post' : (tour_type === 'pre' ? 'pre' : null)]);
     logActivity(req.user, { action: 'update', entityType: 'pre_tour', entityId: Number(req.params.id), label: name });
     res.json({ ok: true });
   } catch (e) {
@@ -168,13 +176,14 @@ router.get('/:id/itinerary', async (req, res) => {
 });
 
 router.post('/:id/itinerary', async (req, res) => {
-  const { day_label, time_label, title, description, location, sort_order } = req.body;
+  const { day_label, time_label, title, description, location, sort_order, duration } = req.body;
   if (!day_label || !title) return res.status(400).json({ error: 'day_label and title are required' });
   try {
     const result = await db.run(`
-      INSERT INTO pre_tour_itinerary (pre_tour_id, day_label, time_label, title, description, location, sort_order)
-      VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id
-    `, [req.params.id, day_label, time_label || '', title, description || '', location || '', Number(sort_order) || 0]);
+      INSERT INTO pre_tour_itinerary (pre_tour_id, day_label, time_label, title, description, location, sort_order, duration)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id
+    `, [req.params.id, day_label, time_label || '', title, description || '', location || '',
+        Number(sort_order) || 0, duration || '']);
     res.json({ id: result.id });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -182,17 +191,19 @@ router.post('/:id/itinerary', async (req, res) => {
 });
 
 router.put('/itinerary/:itemId', async (req, res) => {
-  const { day_label, time_label, title, description, location, sort_order } = req.body;
+  const { day_label, time_label, title, description, location, sort_order, duration } = req.body;
   try {
     await db.run(`
       UPDATE pre_tour_itinerary SET
         day_label=COALESCE($1,day_label), time_label=COALESCE($2,time_label),
         title=COALESCE($3,title), description=COALESCE($4,description),
-        location=COALESCE($5,location), sort_order=COALESCE($6,sort_order)
+        location=COALESCE($5,location), sort_order=COALESCE($6,sort_order),
+        duration=COALESCE($8,duration)
       WHERE id=$7
     `, [day_label || null, time_label !== undefined ? time_label : null, title || null,
         description !== undefined ? description : null, location !== undefined ? location : null,
-        sort_order !== undefined ? Number(sort_order) : null, req.params.itemId]);
+        sort_order !== undefined ? Number(sort_order) : null, req.params.itemId,
+        duration !== undefined ? duration : null]);
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
