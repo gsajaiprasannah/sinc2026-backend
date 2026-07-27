@@ -56,7 +56,7 @@ router.get('/next-number', async (req, res) => {
 });
 
 router.post('/', async (req, res) => {
-  let { reg_number, reg_type, club_id, amount_paid, amount_due, payment_mode, payment_status, payment_ref } = req.body;
+  let { reg_number, reg_type, registration_category, club_id, amount_paid, amount_due, payment_mode, payment_status, payment_ref } = req.body;
   if (!reg_type) return res.status(400).json({ error: 'reg_type is required' });
   try {
     const result = await db.transaction(async (tx) => {
@@ -66,9 +66,9 @@ router.post('/', async (req, res) => {
         reg_number = await computeNextRegNumber(tx);
       }
       const r = await tx.run(`
-        INSERT INTO registrations (reg_number, reg_type, club_id, amount_paid, amount_due, payment_mode, payment_status, payment_ref)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id
-      `, [reg_number, reg_type, club_id || null, Number(amount_paid) || 0, Number(amount_due) || 0,
+        INSERT INTO registrations (reg_number, reg_type, registration_category, club_id, amount_paid, amount_due, payment_mode, payment_status, payment_ref)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id
+      `, [reg_number, reg_type, registration_category || null, club_id || null, Number(amount_paid) || 0, Number(amount_due) || 0,
           payment_mode || '', payment_status || 'pending', payment_ref || '']);
       return r;
     });
@@ -83,11 +83,12 @@ router.post('/', async (req, res) => {
 });
 
 router.put('/:id', async (req, res) => {
-  const { reg_type, club_id, amount_paid, amount_due, payment_mode, payment_status, payment_ref } = req.body;
+  const { reg_type, registration_category, club_id, amount_paid, amount_due, payment_mode, payment_status, payment_ref } = req.body;
   try {
     await db.run(`
       UPDATE registrations SET
-        reg_type=COALESCE($1,reg_type), club_id=COALESCE($2,club_id),
+        reg_type=COALESCE($1,reg_type), registration_category=COALESCE($9,registration_category),
+        club_id=COALESCE($2,club_id),
         amount_paid=COALESCE($3,amount_paid), amount_due=COALESCE($4,amount_due),
         payment_mode=COALESCE($5,payment_mode), payment_status=COALESCE($6,payment_status),
         payment_ref=COALESCE($7,payment_ref)
@@ -95,7 +96,8 @@ router.put('/:id', async (req, res) => {
     `, [reg_type || null, club_id || null,
         amount_paid !== undefined ? Number(amount_paid) : null,
         amount_due !== undefined ? Number(amount_due) : null,
-        payment_mode || null, payment_status || null, payment_ref || null, req.params.id]);
+        payment_mode || null, payment_status || null, payment_ref || null, req.params.id,
+        registration_category || null]);
     logActivity(req.user, { action: 'update', entityType: 'registration', entityId: Number(req.params.id) });
     res.json({ ok: true });
   } catch (e) {
@@ -110,7 +112,26 @@ router.delete('/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
-// Bulk CSV: reg_number,reg_type,club_name,amount_paid,amount_due,payment_mode,payment_status,payment_ref
+// Bulk CSV: reg_number,reg_type,registration_category,club_name,amount_paid,amount_due,payment_mode,payment_status,payment_ref
+// registration_category is optional and accepts either the stored key
+// (early_bird_full) or a human spelling ("Early Bird - Full"), since the
+// office builds these sheets by hand.
+// Accepts "early_bird_full", "Early Bird - Full", "early bird congress only"
+// and similar, returning the stored key or null. Anything unrecognised
+// becomes null rather than failing the whole import — the office can see the
+// blank in the table and fix that one row.
+function normalizeRegCategory(raw) {
+  if (!raw) return null;
+  const k = String(raw).toLowerCase().replace(/[^a-z]+/g, '_').replace(/^_|_$/g, '');
+  const allowed = ['early_bird_full', 'early_bird_congress_only', 'regular_full', 'regular_congress_only'];
+  if (allowed.includes(k)) return k;
+  const tier = k.includes('early') ? 'early_bird' : (k.includes('regular') ? 'regular' : null);
+  if (!tier) return null;
+  const pkg = k.includes('congress') ? 'congress_only' : (k.includes('full') ? 'full' : null);
+  if (!pkg) return null;
+  return `${tier}_${pkg}`;
+}
+
 router.post('/bulk-upload', upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'CSV file is required (field name: file)' });
   try {
@@ -121,10 +142,11 @@ router.post('/bulk-upload', upload.single('file'), async (req, res) => {
         const clubName = r.club_name || r.club || r.Club;
         const club = clubName ? await tx.get('SELECT id FROM clubs WHERE name = $1', [clubName]) : null;
         await tx.run(`
-          INSERT INTO registrations (reg_number, reg_type, club_id, amount_paid, amount_due, payment_mode, payment_status, payment_ref)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+          INSERT INTO registrations (reg_number, reg_type, registration_category, club_id, amount_paid, amount_due, payment_mode, payment_status, payment_ref)
+          VALUES ($1,$2,$9,$3,$4,$5,$6,$7,$8)
           ON CONFLICT (reg_number) DO UPDATE SET
-            reg_type=excluded.reg_type, club_id=excluded.club_id, amount_paid=excluded.amount_paid,
+            reg_type=excluded.reg_type, registration_category=COALESCE(excluded.registration_category, registrations.registration_category),
+            club_id=excluded.club_id, amount_paid=excluded.amount_paid,
             amount_due=excluded.amount_due, payment_mode=excluded.payment_mode,
             payment_status=excluded.payment_status, payment_ref=excluded.payment_ref
         `, [
@@ -135,7 +157,8 @@ router.post('/bulk-upload', upload.single('file'), async (req, res) => {
           Number(r.amount_due || 0),
           r.payment_mode || '',
           r.payment_status || 'pending',
-          r.payment_ref || ''
+          r.payment_ref || '',
+          normalizeRegCategory(r.registration_category || r.registration_type)
         ]);
         imported++;
       }

@@ -152,7 +152,7 @@ router.get('/', async (req, res) => {
     const search = req.query.q ? `%${req.query.q}%` : null;
     const rows = search
       ? await db.all(`
-          SELECT p.*, r.reg_number, r.reg_type, r.payment_status, c.name AS club_name, ${SPOC_SELECT}, ${PRETOUR_SELECT}
+          SELECT p.*, r.reg_number, r.reg_type, r.registration_category, r.payment_status, c.name AS club_name, ${SPOC_SELECT}, ${PRETOUR_SELECT}
           FROM participants p
           LEFT JOIN registrations r ON r.id = p.registration_id
           LEFT JOIN clubs c ON c.id = p.club_id
@@ -161,7 +161,7 @@ router.get('/', async (req, res) => {
           ORDER BY p.created_at DESC
         `, [search])
       : await db.all(`
-          SELECT p.*, r.reg_number, r.reg_type, r.payment_status, c.name AS club_name, ${SPOC_SELECT}, ${PRETOUR_SELECT}
+          SELECT p.*, r.reg_number, r.reg_type, r.registration_category, r.payment_status, c.name AS club_name, ${SPOC_SELECT}, ${PRETOUR_SELECT}
           FROM participants p
           LEFT JOIN registrations r ON r.id = p.registration_id
           LEFT JOIN clubs c ON c.id = p.club_id
@@ -200,7 +200,7 @@ router.get('/host-members-lite', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const row = await db.get(`
-      SELECT p.*, r.reg_number, r.reg_type, r.payment_status, c.name AS club_name, ${SPOC_SELECT}, ${PRETOUR_SELECT}
+      SELECT p.*, r.reg_number, r.reg_type, r.registration_category, r.payment_status, c.name AS club_name, ${SPOC_SELECT}, ${PRETOUR_SELECT}
       FROM participants p
       LEFT JOIN registrations r ON r.id = p.registration_id
       LEFT JOIN clubs c ON c.id = p.club_id

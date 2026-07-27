@@ -9,10 +9,12 @@ router.get('/', async (req, res) => {
     const rows = await db.all(`
       SELECT ra.*, h.name AS hotel_name,
         p.name AS participant_name, p.phone AS participant_phone, p.participant_code,
+        preg.registration_category,
         hm.name AS host_member_name, hm.phone AS host_member_phone
       FROM room_assignments ra
       JOIN hotels h ON h.id = ra.hotel_id
       LEFT JOIN participants p ON p.id = ra.participant_id
+      LEFT JOIN registrations preg ON preg.id = p.registration_id
       LEFT JOIN host_members hm ON hm.id = ra.host_member_id
       ORDER BY h.name, ra.room_number
     `);
@@ -31,8 +33,11 @@ router.get('/', async (req, res) => {
 router.get('/participants-lite', async (req, res) => {
   try {
     const rows = await db.all(`
-      SELECT p.id, p.name, p.participant_code, c.name AS club_name
-      FROM participants p LEFT JOIN clubs c ON c.id = p.club_id
+      SELECT p.id, p.name, p.participant_code, c.name AS club_name,
+        r.registration_category
+      FROM participants p
+      LEFT JOIN clubs c ON c.id = p.club_id
+      LEFT JOIN registrations r ON r.id = p.registration_id
       ORDER BY p.name
     `);
     res.json(rows);

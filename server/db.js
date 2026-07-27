@@ -1630,6 +1630,22 @@ async function initSchema() {
     // server/uploadHelper.js.
     await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS logo_url TEXT;`);
   }
+
+  // --- Delegate registration category -----------------------------------
+  // What package a booking was sold on, which is a different question from
+  // reg_type. reg_type is *occupancy* — single/double decides how many
+  // delegates a registration may hold and drives the "Double = 2" headcount
+  // everywhere; this is the *product*: early-bird vs regular pricing, and
+  // Full (includes hotel accommodation) vs Congress Only (sessions only, no
+  // room). Kept as a separate column rather than folded into reg_type so the
+  // existing capacity checks and delegate counts are untouched.
+  //
+  // Nullable with no default: registrations taken before this existed have
+  // no recorded category, and guessing one would be worse than showing the
+  // office an honest blank to go back and fill in.
+  await pool.query(`ALTER TABLE registrations ADD COLUMN IF NOT EXISTS registration_category TEXT;`);
+  await pool.query(`ALTER TABLE registrations DROP CONSTRAINT IF EXISTS registrations_category_check;`);
+  await pool.query(`ALTER TABLE registrations ADD CONSTRAINT registrations_category_check CHECK (registration_category IS NULL OR registration_category IN ('early_bird_full','early_bird_congress_only','regular_full','regular_congress_only'));`);
 }
 
 module.exports = { pool, all, get, run, transaction, initSchema };
