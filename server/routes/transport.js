@@ -59,16 +59,24 @@ router.get('/', async (req, res) => {
 // delegate one at a time. Each delegate's already-assigned hotel (if any) is
 // included so the destination can be pre-filled. Registered before /:id so
 // this literal path isn't swallowed as an id.
+// Returns ONE ROW PER DELEGATE rather than pre-grouped clusters. Grouping
+// used to happen here, in SQL, keyed on an exact travel_number match — which
+// meant two different flights landing at the same airport ten minutes apart
+// became two groups and two vehicles. The transport committee actually wants
+// to pool by "same place, near enough the same time", and what counts as
+// "near enough" changes with how busy the day is. That's a judgement call
+// best made on screen, so the clustering moved to the client (see
+// clusterTransportQueue() in js/admin.js), which can re-group instantly as
+// the planner widens or narrows the time window. This endpoint's job is now
+// just "who still needs an arrival trip, and what do we know about them".
 router.get('/arrivals-queue', async (req, res) => {
   try {
     const rows = await db.all(`
-      SELECT p.travel_mode, p.travel_number, p.travel_datetime, p.arrival_point,
-        json_agg(json_build_object(
-          'id', p.id, 'name', p.name, 'phone', p.phone, 'participant_code', p.participant_code,
-          'club_name', c.name, 'reg_number', r.reg_number,
-          'hotel_id', ra.hotel_id, 'hotel_name', h.name
-        ) ORDER BY p.name) AS delegates,
-        COUNT(*)::int AS delegate_count
+      SELECT p.id, p.name, p.phone, p.participant_code,
+        p.travel_mode, p.travel_number, p.travel_datetime,
+        p.arrival_point,
+        c.name AS club_name, r.reg_number,
+        ra.hotel_id, h.name AS hotel_name
       FROM participants p
       LEFT JOIN clubs c ON c.id = p.club_id
       LEFT JOIN registrations r ON r.id = p.registration_id
@@ -82,8 +90,7 @@ router.get('/arrivals-queue', async (req, res) => {
           JOIN transport_trips t ON t.id = tp.trip_id
           WHERE tp.participant_id = p.id AND t.trip_type = 'arrival'
         )
-      GROUP BY p.travel_mode, p.travel_number, p.travel_datetime, p.arrival_point
-      ORDER BY p.travel_datetime, p.travel_number
+      ORDER BY p.travel_datetime, p.travel_number, p.name
     `);
     res.json(rows);
   } catch (e) {
@@ -96,17 +103,20 @@ router.get('/arrivals-queue', async (req, res) => {
 // falls back to arrival_point for older rows saved before that field
 // existed (most people depart from the same airport/station they arrived
 // through, so it's a reasonable default, but no longer the only source).
+// Same idea in reverse, and likewise one row per delegate — see the arrivals
+// endpoint above for why the clustering isn't done here any more. Uses the
+// delegate's own departure_point where set, falling back to arrival_point for
+// older rows saved before that field existed (most people leave from the same
+// airport/station they arrived through, so it's a reasonable default).
 router.get('/departures-queue', async (req, res) => {
   try {
     const rows = await db.all(`
-      SELECT p.departure_mode AS travel_mode, p.departure_number AS travel_number,
-        p.departure_datetime AS travel_datetime, COALESCE(p.departure_point, p.arrival_point) AS departure_point,
-        json_agg(json_build_object(
-          'id', p.id, 'name', p.name, 'phone', p.phone, 'participant_code', p.participant_code,
-          'club_name', c.name, 'reg_number', r.reg_number,
-          'hotel_id', ra.hotel_id, 'hotel_name', h.name
-        ) ORDER BY p.name) AS delegates,
-        COUNT(*)::int AS delegate_count
+      SELECT p.id, p.name, p.phone, p.participant_code,
+        p.departure_mode AS travel_mode, p.departure_number AS travel_number,
+        p.departure_datetime AS travel_datetime,
+        COALESCE(p.departure_point, p.arrival_point) AS departure_point,
+        c.name AS club_name, r.reg_number,
+        ra.hotel_id, h.name AS hotel_name
       FROM participants p
       LEFT JOIN clubs c ON c.id = p.club_id
       LEFT JOIN registrations r ON r.id = p.registration_id
@@ -120,8 +130,7 @@ router.get('/departures-queue', async (req, res) => {
           JOIN transport_trips t ON t.id = tp.trip_id
           WHERE tp.participant_id = p.id AND t.trip_type = 'departure'
         )
-      GROUP BY p.departure_mode, p.departure_number, p.departure_datetime, COALESCE(p.departure_point, p.arrival_point)
-      ORDER BY p.departure_datetime, p.departure_number
+      ORDER BY p.departure_datetime, p.departure_number, p.name
     `);
     res.json(rows);
   } catch (e) {
