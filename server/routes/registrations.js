@@ -85,6 +85,22 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   const { reg_type, registration_category, club_id, amount_paid, amount_due, payment_mode, payment_status, payment_ref } = req.body;
   try {
+    // Occupancy can now be changed from the Delegates form (the combined
+    // "Registration type" dropdown sets package and occupancy together), so
+    // guard against narrowing a Double that already holds two delegates —
+    // that would leave a delegate attached to a booking with no room for
+    // them, which the capacity check would then reject on every later edit.
+    if (reg_type && reg_type !== 'double') {
+      const linked = await db.get(
+        'SELECT COUNT(*)::int AS n FROM participants WHERE registration_id=$1',
+        [req.params.id]
+      );
+      if (linked && linked.n > 1) {
+        return res.status(400).json({
+          error: `This registration already has ${linked.n} delegates linked, so it can't be changed to a single-occupancy type. Remove or move one of the delegates first.`
+        });
+      }
+    }
     await db.run(`
       UPDATE registrations SET
         reg_type=COALESCE($1,reg_type), registration_category=COALESCE($9,registration_category),
