@@ -1606,6 +1606,25 @@ async function initSchema() {
   // per-type auto-generated code prefix (C/U/F/A/S/O).
   await pool.query(`ALTER TABLE vehicles DROP CONSTRAINT IF EXISTS vehicles_vehicle_type_check;`);
   await pool.query(`ALTER TABLE vehicles ADD CONSTRAINT vehicles_vehicle_type_check CHECK (vehicle_type IN ('sedan','suv','force_traveller','bus','van','others','car'));`);
+
+  // --- Catering + accommodation for host members and volunteers ---------
+  // participants already carried dietary_preference / drink_preference /
+  // special_requests; host_members and volunteers now do too, so my-profile.html
+  // can collect the same catering headcount from the host team and the
+  // Delegates/Host Members reports can be compared like for like.
+  //
+  // hotel_stay_required is deliberately BOOLEAN NOT NULL DEFAULT false: the
+  // host club is local, so a room is the exception rather than the norm and
+  // "no" is the safe default for anyone who never opens the form.
+  // hotel_stay_notes captures the free-text "which nights / why" that the
+  // organisers need to judge an essential-only request.
+  for (const t of ['host_members', 'volunteers']) {
+    await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS dietary_preference TEXT;`);
+    await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS drink_preference TEXT;`);
+    await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS special_requests TEXT;`);
+    await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS hotel_stay_required BOOLEAN NOT NULL DEFAULT false;`);
+    await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS hotel_stay_notes TEXT;`);
+  }
 }
 
 module.exports = { pool, all, get, run, transaction, initSchema };

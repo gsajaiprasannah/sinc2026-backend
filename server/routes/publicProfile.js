@@ -51,7 +51,11 @@ async function findMatches(name, phone) {
          dietary_preference, drink_preference, special_requests, business_profile,
          aadhaar_number, aadhaar_url, passport_number, passport_url,
          (SELECT ptp.pre_tour_id FROM pre_tour_participants ptp WHERE ptp.participant_id = ${table}.id ORDER BY ptp.id LIMIT 1) AS pre_tour_id`
-      : '';
+      // host_members/volunteers answer the same catering questions plus the
+      // accommodation one, on my-profile.html — returned here so that form
+      // can prefill what they've already told us.
+      : `, dietary_preference, drink_preference, special_requests,
+         hotel_stay_required, hotel_stay_notes`;
     const rows = await db.all(`
       SELECT id, name, email, shirt_size, tshirt_size, waist_size, photo_url, business_card_url${extraCols}
       FROM ${table}
@@ -105,14 +109,38 @@ async function verifyOwnership(type, id, name, phone) {
 // my-profile.html — the address the Email Campaigns admin feature then sends
 // to (see server/routes/emailCampaigns.js). Left optional/nullable, same as
 // every other field here — an admin can still fill it in manually instead.
+// Catering/accommodation fields, added for host members and volunteers (see
+// the migration in db.js). participants have the same columns but fill them
+// in via my-travel.html instead, so they're only written here when actually
+// submitted — see the "only update what was sent" note below.
+const PROFILE_EXTRA_FIELDS = {
+  dietary_preference: (v) => cleanText(v),
+  drink_preference: (v) => cleanText(v),
+  special_requests: (v) => cleanText(v),
+  hotel_stay_notes: (v) => cleanText(v),
+  // Checkbox — accept a real boolean or the string forms a form/JSON might send.
+  hotel_stay_required: (v) => (v === true || v === 'true' || v === 'on' || v === 1 || v === '1'),
+};
+
 router.put('/:type/:id', async (req, res) => {
   const { name, phone, email, shirt_size, tshirt_size, waist_size } = req.body;
   try {
     const verified = await verifyOwnership(req.params.type, req.params.id, name, phone);
     if (!verified) return res.status(403).json({ error: 'Name and phone number did not match our records — please look yourself up again.' });
-    await db.run(`UPDATE ${verified.table} SET email=$1, shirt_size=$2, tshirt_size=$3, waist_size=$4 WHERE id=$5`, [
-      cleanText(email), shirt_size || null, tshirt_size || null, waist_size || null, req.params.id
-    ]);
+
+    const sets = ['email=$1', 'shirt_size=$2', 'tshirt_size=$3', 'waist_size=$4'];
+    const params = [cleanText(email), shirt_size || null, tshirt_size || null, waist_size || null];
+    // Only write the extras the client actually sent. my-profile.html posts
+    // them; my-travel.html (Delegates) doesn't, and a delegate who also opens
+    // my-profile.html must not have the food/drink answers they gave on the
+    // travel page silently blanked by a form that never showed those inputs.
+    for (const [col, clean] of Object.entries(PROFILE_EXTRA_FIELDS)) {
+      if (req.body[col] === undefined) continue;
+      params.push(clean(req.body[col]));
+      sets.push(`${col}=$${params.length}`);
+    }
+    params.push(req.params.id);
+    await db.run(`UPDATE ${verified.table} SET ${sets.join(', ')} WHERE id=$${params.length}`, params);
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
