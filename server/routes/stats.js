@@ -1,4 +1,5 @@
 const express = require('express');
+const { DOUBLE_TYPES_SQL } = require('../lib/regType');
 const db = require('../db');
 
 const router = express.Router();
@@ -9,7 +10,8 @@ router.get('/overview', async (req, res) => {
     const totalClubs = (await db.get('SELECT COUNT(*) AS n FROM clubs')).n;
     const totalRegistrations = (await db.get('SELECT COUNT(*) AS n FROM registrations')).n;
     const singleRegs = (await db.get("SELECT COUNT(*) AS n FROM registrations WHERE reg_type='single'")).n;
-    const doubleRegs = (await db.get("SELECT COUNT(*) AS n FROM registrations WHERE reg_type='double'")).n;
+    // Any double variant counts here, so the "Double = 2" headcount stays right.
+    const doubleRegs = (await db.get(`SELECT COUNT(*) AS n FROM registrations WHERE reg_type IN (${DOUBLE_TYPES_SQL})`)).n;
     const congressOnlyRegs = (await db.get("SELECT COUNT(*) AS n FROM registrations WHERE reg_type='congress_only'")).n;
     const totalParticipants = (await db.get('SELECT COUNT(*) AS n FROM participants')).n;
     const totalCollected = (await db.get('SELECT COALESCE(SUM(amount_paid),0) AS n FROM registrations')).n;

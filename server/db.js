@@ -658,7 +658,13 @@ async function initSchema() {
   // the CHECK constraint relaxed (Postgres won't alter CHECK constraints in
   // place — drop and recreate, same pattern as users_role_check above).
   await pool.query(`ALTER TABLE registrations DROP CONSTRAINT IF EXISTS registrations_reg_type_check;`);
-  await pool.query(`ALTER TABLE registrations ADD CONSTRAINT registrations_reg_type_check CHECK (reg_type IN ('single','double','congress_only'));`);
+  // 'double' is kept in the allowed set alongside the two new bed-type
+  // variants so existing double registrations stay valid — adding a stricter
+  // CHECK validates every existing row and would crash the migration (and app
+  // boot) if any violated it. Both double_king and double_twin count as two
+  // delegates: see isDoubleOccupancy() in server/lib/regType.js, which every
+  // capacity check and headcount goes through.
+  await pool.query(`ALTER TABLE registrations ADD CONSTRAINT registrations_reg_type_check CHECK (reg_type IN ('single','double','double_king','double_twin','congress_only'));`);
 
   // Safe to run repeatedly — adds the column only if an older schema is missing it.
   await pool.query(`ALTER TABLE participants ADD COLUMN IF NOT EXISTS dietary_preference TEXT;`);

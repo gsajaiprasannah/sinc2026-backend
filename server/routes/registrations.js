@@ -1,4 +1,5 @@
 const express = require('express');
+const { isDoubleOccupancy } = require('../lib/regType');
 const multer = require('multer');
 const { parse } = require('csv-parse/sync');
 const db = require('../db');
@@ -90,7 +91,7 @@ router.put('/:id', async (req, res) => {
     // guard against narrowing a Double that already holds two delegates —
     // that would leave a delegate attached to a booking with no room for
     // them, which the capacity check would then reject on every later edit.
-    if (reg_type && reg_type !== 'double') {
+    if (reg_type && !isDoubleOccupancy(reg_type)) {
       const linked = await db.get(
         'SELECT COUNT(*)::int AS n FROM participants WHERE registration_id=$1',
         [req.params.id]

@@ -6,6 +6,7 @@ const { attachChecklistRoutes, deleteChecklistForOwner } = require('./checklistH
 const { saveFile, deleteStoredFile, readStoredFile, storedFileExt } = require('../uploadHelper');
 const { logActivity } = require('../lib/activityLogger');
 const { createZip, zipSafeName } = require('../lib/zip');
+const { occupancyOf, REG_TYPE_LABEL: REG_TYPE_LABELS } = require('../lib/regType');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -61,18 +62,19 @@ function normEmail(e) {
 // is_primary=1). This helper enforces the two rules that keep that pairing
 // meaningful instead of just two unlinked rows that happen to share a
 // registration: (1) a registration can't hold more delegates than its
-// reg_type allows (1 for single/congress_only, 2 for double), and (2) a
+// reg_type allows (1 for single/congress_only, 2 for any double), and (2) a
 // registration can't have two primary registrants at once. Both are hard
 // blocks (no `force` override) since — unlike the "possibly the same
 // person" duplicate check below — there's no legitimate reason to violate
 // either rule; the fix is always to pick a different registration or edit
 // the existing delegate instead.
-const REG_TYPE_LABEL_SERVER = { single: 'Single', double: 'Double', congress_only: 'Congress Only' };
+const REG_TYPE_LABEL_SERVER = REG_TYPE_LABELS;
 async function checkRegistrationCapacity(runner, registrationId, isPrimary, excludeId) {
   if (!registrationId) return null;
   const reg = await runner.get('SELECT reg_number, reg_type FROM registrations WHERE id=$1', [registrationId]);
   if (!reg) return null; // an invalid id is left for the FK constraint to reject
-  const maxAllowed = reg.reg_type === 'double' ? 2 : 1;
+  // double_king/double_twin both hold two — see lib/regType.js.
+  const maxAllowed = occupancyOf(reg.reg_type);
   let sql = 'SELECT id, name, is_primary FROM participants WHERE registration_id=$1';
   const params = [registrationId];
   if (excludeId) {
