@@ -1666,6 +1666,16 @@ async function initSchema() {
   // Itinerary items gain a free-text duration/notes field so a day can carry
   // real detail ("2 hrs, includes guided walk") beyond a single time stamp.
   await pool.query(`ALTER TABLE pre_tour_itinerary ADD COLUMN IF NOT EXISTS duration TEXT;`);
+
+  // --- One-off / external email recipients --------------------------------
+  // Campaigns could only target rows already in the database. The office also
+  // needs to mail an address that isn't a delegate, host member or sponsor —
+  // a hotel contact, a vendor, one person for a re-send. 'manual' is an
+  // audience whose recipients come from this free-text column instead of a
+  // table, stored as one "Name <email>" (or bare email) per line.
+  await pool.query(`ALTER TABLE email_campaigns ADD COLUMN IF NOT EXISTS manual_recipients TEXT;`);
+  await pool.query(`ALTER TABLE email_campaigns DROP CONSTRAINT IF EXISTS email_campaigns_audience_type_check;`);
+  await pool.query(`ALTER TABLE email_campaigns ADD CONSTRAINT email_campaigns_audience_type_check CHECK (audience_type IN ('participant','host_member','volunteer','sponsor','speaker','guest_visitor','manual'));`);
 }
 
 module.exports = { pool, all, get, run, transaction, initSchema };

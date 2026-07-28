@@ -60,6 +60,14 @@ const AUDIENCES = {
             NULL::text AS company, organization, NULL::text AS tier, topic, NULL::text AS code
           FROM speakers`
   },
+  // No SQL — recipients come from the campaign's manual_recipients text
+  // instead of a table. Lets the office mail an address that isn't in the
+  // database at all (a hotel contact, a vendor, a one-off re-send).
+  manual: {
+    label: 'Manually entered addresses',
+    manual: true,
+    sql: null
+  },
   guest_visitor: {
     label: 'Guest Visitors',
     sql: `SELECT id, name, email, phone, NULL::text AS club, designation,
@@ -67,6 +75,32 @@ const AUDIENCES = {
           FROM guest_visitors`
   }
 };
+
+// Recipients typed in by hand rather than drawn from a table. Accepts one
+// per line or comma/semicolon separated, as "Name <a@b.com>" or a bare
+// address, so the office can paste straight out of a spreadsheet or another
+// mail client. Entries without an @ are skipped rather than failing the whole
+// list, and duplicates are dropped so nobody gets the same mail twice.
+function parseManualRecipients(raw) {
+  const out = [];
+  const seen = new Set();
+  String(raw || '').split(/[\n,;]+/).forEach((chunk) => {
+    const line = chunk.trim();
+    if (!line) return;
+    const angled = line.match(/^(.*?)<([^>]+)>$/);
+    const name = angled ? angled[1].trim().replace(/^["']|["']$/g, '') : '';
+    const email = (angled ? angled[2] : line).trim();
+    if (!email.includes('@')) return;
+    const key = email.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    // id is the position in the list. email_campaign_recipients.recipient_id
+    // is NOT NULL and the send loop updates rows by it, so manual recipients
+    // get a stable synthetic index rather than needing a nullable column.
+    out.push({ id: out.length, name: name || email, email });
+  });
+  return out;
+}
 
 function assertAudience(audience_type) {
   if (!AUDIENCES[audience_type]) throw new Error(`Unknown audience_type "${audience_type}"`);
@@ -76,8 +110,11 @@ function assertAudience(audience_type) {
 // Rows for an audience, optionally narrowed to specific ids. hasEmailOnly
 // filters to rows with a non-blank email (the actual sendable set); pass
 // false to get the full roster (used by /audiences' total count).
-async function fetchAudienceRows(audience_type, { recipientIds, hasEmailOnly = true } = {}) {
-  const { sql } = assertAudience(audience_type);
+async function fetchAudienceRows(audience_type, { recipientIds, hasEmailOnly = true, manualRecipients } = {}) {
+  const entry = assertAudience(audience_type);
+  // Manual audiences have no table to query — the addresses are the payload.
+  if (entry.manual) return parseManualRecipients(manualRecipients);
+  const { sql } = entry;
   const clauses = [];
   const params = [];
   if (hasEmailOnly) clauses.push(`email IS NOT NULL AND trim(email) <> ''`);
@@ -110,6 +147,8 @@ router.get('/audiences', async (req, res) => {
   try {
     const out = {};
     for (const [key, meta] of Object.entries(AUDIENCES)) {
+      // Manual has no roster to count — its size depends on what's typed in.
+      if (meta.manual) { out[key] = { label: meta.label, total: 0, with_email: 0, manual: true }; continue; }
       const total = await db.get(`SELECT COUNT(*)::int AS n FROM (${meta.sql}) t`);
       const withEmail = await db.get(`SELECT COUNT(*)::int AS n FROM (${meta.sql}) t WHERE email IS NOT NULL AND trim(email) <> ''`);
       out[key] = { label: meta.label, total: total.n, with_email: withEmail.n };
@@ -125,6 +164,8 @@ router.get('/audiences', async (req, res) => {
 // email on file (shown but not selectable in the UI if not).
 router.get('/directory/:audience_type', async (req, res) => {
   try {
+    // Nothing to pick from — a manual audience is defined by what's typed.
+    if (AUDIENCES[req.params.audience_type] && AUDIENCES[req.params.audience_type].manual) return res.json([]);
     const rows = await fetchAudienceRows(req.params.audience_type, { hasEmailOnly: false });
     res.json(rows.map((r) => ({
       id: r.id, name: r.name, email: r.email || '',
@@ -139,9 +180,9 @@ router.get('/directory/:audience_type', async (req, res) => {
 // plus the first couple of rows personalized, so an admin can sanity-check
 // merge tokens before committing to Create/Send.
 router.post('/preview', async (req, res) => {
-  const { audience_type, recipient_ids, subject, body_html } = req.body;
+  const { audience_type, recipient_ids, subject, body_html, manual_recipients } = req.body;
   try {
-    const rows = await fetchAudienceRows(audience_type, { recipientIds: recipient_ids });
+    const rows = await fetchAudienceRows(audience_type, { recipientIds: recipient_ids, manualRecipients: manual_recipients });
     const sample = rows.slice(0, 3).map((r) => ({
       name: r.name, email: r.email,
       subject: personalize(subject, r),
@@ -155,7 +196,7 @@ router.post('/preview', async (req, res) => {
 
 // --- Create (draft) ---
 router.post('/', async (req, res) => {
-  const { name, subject, body_html, audience_type, recipient_ids, from_name } = req.body;
+  const { name, subject, body_html, audience_type, recipient_ids, from_name, manual_recipients } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'name is required' });
   if (!subject || !subject.trim()) return res.status(400).json({ error: 'subject is required' });
   if (!body_html || !body_html.trim()) return res.status(400).json({ error: 'body_html is required' });
@@ -165,14 +206,20 @@ router.post('/', async (req, res) => {
     return res.status(400).json({ error: e.message });
   }
   try {
+    // A manual campaign with no parseable address would send to nobody, so
+    // it's rejected here rather than saved as an empty draft.
+    if (AUDIENCES[audience_type].manual && !parseManualRecipients(manual_recipients).length) {
+      return res.status(400).json({ error: 'Enter at least one valid email address (one per line, or comma separated).' });
+    }
     const row = await db.get(
-      `INSERT INTO email_campaigns (name, subject, body_html, audience_type, recipient_ids, from_name, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+      `INSERT INTO email_campaigns (name, subject, body_html, audience_type, recipient_ids, from_name, created_by, manual_recipients)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
       [
         name.trim(), subject.trim(), body_html, audience_type,
         (Array.isArray(recipient_ids) && recipient_ids.length) ? recipient_ids : null,
         (from_name && from_name.trim()) || 'SINC2026 Congress',
-        req.user.id
+        req.user.id,
+        manual_recipients || null
       ]
     );
     logActivity(req.user, { action: 'create', entityType: 'email_campaign', entityId: row.id, label: row.name });
@@ -239,7 +286,7 @@ router.post('/:id/send-test', async (req, res) => {
   try {
     const campaign = await db.get('SELECT * FROM email_campaigns WHERE id=$1', [req.params.id]);
     if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
-    const rows = await fetchAudienceRows(campaign.audience_type, { recipientIds: campaign.recipient_ids });
+    const rows = await fetchAudienceRows(campaign.audience_type, { recipientIds: campaign.recipient_ids, manualRecipients: campaign.manual_recipients });
     const sampleRow = rows[0] || { name: 'Sample Name', email: to };
     const result = await sendEmail({
       to: to.trim(),
@@ -272,7 +319,7 @@ async function runInBatches(items, worker) {
 async function processSend(campaignId) {
   const campaign = await db.get('SELECT * FROM email_campaigns WHERE id=$1', [campaignId]);
   if (!campaign) return;
-  const rows = await fetchAudienceRows(campaign.audience_type, { recipientIds: campaign.recipient_ids });
+  const rows = await fetchAudienceRows(campaign.audience_type, { recipientIds: campaign.recipient_ids, manualRecipients: campaign.manual_recipients });
 
   // One recipient row per person, created up front as 'pending' so the admin
   // UI has something to poll immediately even before the first send lands.
@@ -315,7 +362,7 @@ router.post('/:id/send', async (req, res) => {
     if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
     if (campaign.status === 'sending') return res.status(409).json({ error: 'This campaign is already sending.' });
 
-    const rows = await fetchAudienceRows(campaign.audience_type, { recipientIds: campaign.recipient_ids });
+    const rows = await fetchAudienceRows(campaign.audience_type, { recipientIds: campaign.recipient_ids, manualRecipients: campaign.manual_recipients });
     if (!rows.length) return res.status(400).json({ error: 'No recipients with a valid email match this campaign — nothing to send.' });
 
     await db.run(`UPDATE email_campaigns SET status='sending' WHERE id=$1`, [req.params.id]);
