@@ -121,4 +121,62 @@ router.delete('/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
+// --- Stall Report: visit counts + per-booking drill-down --------------
+// Feeds the admin panel's "Stall Report" tab (nested under the Stalls
+// sidebar group, below Halls & Stalls / Enquiries & Bookings). A stall_owner
+// login is tied to exactly one stall_bookings row (users.stall_id ->
+// stall_bookings.id — one login per exhibitor company, not per physical
+// stall), and every badge they scan writes a row to the shared
+// attendance_log table via badge.js's POST /staff/:token/stall-visit, with
+// scan_point='stall' and meta.stall_id set to that same booking id. So
+// "how many people visited this stall, and who" is just a filter on
+// attendance_log — no separate stall-visits table to keep in sync.
+router.get('/visits-summary', async (req, res) => {
+  try {
+    const rows = await db.all(`
+      SELECT b.id, b.company_name, b.contact_person, b.status,
+        s.stall_number, h.name AS hall_name,
+        COUNT(al.id)::int AS visit_count
+      FROM stall_bookings b
+      LEFT JOIN stalls s ON s.id = b.stall_id
+      LEFT JOIN stall_halls h ON h.id = s.hall_id
+      LEFT JOIN attendance_log al ON al.scan_point = 'stall' AND (al.meta->>'stall_id')::int = b.id
+      GROUP BY b.id, s.stall_number, h.name
+      ORDER BY visit_count DESC, b.company_name
+    `);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.get('/:id/visits', async (req, res) => {
+  try {
+    const booking = await db.get(`
+      SELECT b.*, s.stall_number, h.name AS hall_name
+      FROM stall_bookings b
+      LEFT JOIN stalls s ON s.id = b.stall_id
+      LEFT JOIN stall_halls h ON h.id = s.hall_id
+      WHERE b.id=$1
+    `, [req.params.id]);
+    if (!booking) return res.status(404).json({ error: 'Booking not found' });
+    const visits = await db.all(`
+      SELECT al.id, al.checked_in_at, al.entity_type,
+        COALESCE(p.name, hm.name) AS name,
+        COALESCE(p.phone, hm.phone) AS phone,
+        COALESCE(p.email, hm.email) AS email,
+        COALESCE(c.name, hm.company) AS club_or_company
+      FROM attendance_log al
+      LEFT JOIN participants p ON al.entity_type='participant' AND p.id = al.entity_id
+      LEFT JOIN clubs c ON c.id = p.club_id
+      LEFT JOIN host_members hm ON al.entity_type='host_member' AND hm.id = al.entity_id
+      WHERE al.scan_point = 'stall' AND (al.meta->>'stall_id')::int = $1
+      ORDER BY al.checked_in_at DESC
+    `, [req.params.id]);
+    res.json({ booking, visits });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 module.exports = router;

@@ -638,9 +638,11 @@ staffRouter.get('/my-scans', async (req, res) => {
         al.entity_type, al.entity_id,
         COALESCE(p.name, hm.name) AS entity_name,
         COALESCE(p.phone, hm.phone) AS entity_phone,
-        COALESCE(p.email, hm.email) AS entity_email
+        COALESCE(p.email, hm.email) AS entity_email,
+        COALESCE(c.name, hm.company) AS entity_club_or_company
       FROM attendance_log al
       LEFT JOIN participants p ON al.entity_type='participant' AND p.id = al.entity_id
+      LEFT JOIN clubs c ON c.id = p.club_id
       LEFT JOIN host_members hm ON al.entity_type='host_member' AND hm.id = al.entity_id
       WHERE ${where}
       ORDER BY al.checked_in_at DESC
