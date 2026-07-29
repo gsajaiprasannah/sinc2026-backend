@@ -529,6 +529,65 @@ staffRouter.get('/my-goodies-checklist', requireCap('inventory'), async (req, re
   }
 });
 
+// --- Event Attendance: registration-desk QR scanning -----------------------
+// Every congress itinerary slot (server/routes/itinerary.js's itinerary_
+// items — the SAME table the Itinerary module edits) is a possible "which
+// event is this attendance for" choice. Listing it live here, rather than a
+// separate hardcoded scan-config list, is what makes "even after the
+// itinerary is modified, the scanner should work" true: rename a slot, add
+// a new one, reorder the day — the dropdown reflects it on the very next
+// fetch, no code change needed.
+staffRouter.get('/itinerary-events', requireCap('registration'), async (req, res) => {
+  try {
+    const rows = await db.all(`
+      SELECT ii.id, ii.day_label, ii.time_label, ii.title,
+        COUNT(ea.id)::int AS present_count
+      FROM itinerary_items ii
+      LEFT JOIN event_attendance ea ON ea.itinerary_item_id = ii.id
+      GROUP BY ii.id
+      ORDER BY ii.sort_order, ii.id
+    `);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Marks the scanned badge present for whichever itinerary slot the scanner
+// picked from the dropdown above — idempotent (re-scanning the same person
+// for the same event just reports back their original check-in time rather
+// than erroring or duplicating), same "already done" handling as the
+// transport/goodies scans above.
+staffRouter.post('/staff/:token/attendance-scan', requireCap('registration'), async (req, res) => {
+  try {
+    const itineraryItemId = req.body.itinerary_item_id;
+    if (!itineraryItemId) return res.status(400).json({ error: 'Select an event before scanning.' });
+    const found = await findByToken(req.params.token);
+    if (!found) return res.status(404).json({ error: 'Badge not found' });
+    const { type, row } = found;
+
+    const item = await db.get('SELECT id, day_label, time_label, title FROM itinerary_items WHERE id=$1', [itineraryItemId]);
+    if (!item) return res.status(404).json({ error: 'That event no longer exists — refresh the event list.' });
+
+    const existing = await db.get(
+      `SELECT checked_in_at FROM event_attendance WHERE itinerary_item_id=$1 AND entity_type=$2 AND entity_id=$3`,
+      [itineraryItemId, type, row.id]
+    );
+    if (existing) {
+      return res.json({ marked: true, alreadyMarked: true, checked_in_at: existing.checked_in_at, event: item });
+    }
+    const result = await db.run(
+      `INSERT INTO event_attendance (itinerary_item_id, entity_type, entity_id, checked_in_by_user_id)
+       VALUES ($1,$2,$3,$4) RETURNING checked_in_at`,
+      [itineraryItemId, type, row.id, req.user.id]
+    );
+    await recordScan({ entityType: type, entityId: row.id, scanPoint: 'registration', userId: req.user.id, meta: { itinerary_item_id: Number(itineraryItemId) } });
+    res.json({ marked: true, alreadyMarked: false, checked_in_at: result.rows[0].checked_in_at, event: item });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // --- Reporting: who scanned whom ---
 // Full cross-scanner history, admin/super_admin only (an extra check layered
 // on top of staffRouter's requireAuth mount, same pattern as the GET-vs-other

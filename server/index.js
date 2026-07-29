@@ -152,6 +152,9 @@ app.use('/api/volunteer', require('./routes/volunteerSelf'));
   // routers" pattern as transport_partners/accommodation above.
   app.use('/api/portal-modules/agenda', requireModuleAccess('itinerary'), require('./routes/agenda'));
   app.use('/api/portal-modules/performer-groups', requireModuleAccess('itinerary'), require('./routes/performerGroups'));
+  // Attendance report (who was scanned present at each itinerary slot) —
+  // same one-checkbox-several-routers reuse of the Itinerary module grant.
+  app.use('/api/portal-modules/attendance', requireModuleAccess('itinerary'), require('./routes/attendance'));
   // Delegate registration data entry (for volunteers doing on-site/onboarding
   // data entry) — clubs (so a club dropdown/quick-add is available), the
   // registrations they belong to, and the delegates themselves. One module
@@ -200,6 +203,15 @@ app.use('/api/stall-bookings', requireAdminRole, require('./routes/stallBookings
 // their payment. Admin-only for now (not surfaced on the public itinerary).
 app.use('/api/agenda', requireAdminRole, require('./routes/agenda'));
 app.use('/api/performer-groups', requireAdminRole, require('./routes/performerGroups'));
+
+// --- Attendance (registration desk QR scanning, under Itinerary) ---------
+// Who actually showed up to each itinerary slot — the report/management
+// side (list + per-event attendee list + manual correction); the actual
+// marking happens via the badge scanner (server/routes/badge.js's
+// /attendance-scan). Reuses requireModuleAccess('itinerary') for the
+// committee portal, same as Agenda/Performer Groups above — attendance is a
+// sub-feature of Itinerary, not a separately grantable module.
+app.use('/api/attendance', requireAdminRole, require('./routes/attendance'));
 
 // --- Finance: inward/outward money tracking + payment approvals ---
 // Inward is mostly a read-only rollup of payments already recorded by other

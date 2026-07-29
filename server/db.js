@@ -1713,6 +1713,38 @@ async function initSchema() {
   // can show who's actually on the vehicle, not just who was planned onto it.
   await pool.query(`ALTER TABLE transport_trip_passengers ADD COLUMN IF NOT EXISTS boarded_at TIMESTAMP;`);
   await pool.query(`ALTER TABLE transport_trip_passengers ADD COLUMN IF NOT EXISTS boarded_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL;`);
+
+  // --- Event attendance (registration desk QR scanning) --------------------
+  // One row per person marked present at one itinerary slot (see
+  // itinerary_items above — "Day 2, 9:00 AM, Inaugural Ceremony" etc). Tied
+  // to itinerary_item_id rather than a separate hardcoded "sessions" list on
+  // purpose: the registration desk's scanner dropdown (server/routes/
+  // badge.js's GET /itinerary-events) reads the SAME live itinerary_items
+  // table the Itinerary module edits, so renaming/retiming/adding a slot
+  // there is immediately reflected at the scanner with no separate step —
+  // "even after the itinerary is modified, the scanner should work". ON
+  // DELETE CASCADE mirrors agenda_events' own FK to itinerary_items: if a
+  // slot is deleted outright (not just edited), its attendance goes with it.
+  // UNIQUE per (item, entity) makes a re-scan of the same badge at the same
+  // event a harmless no-op rather than a duplicate row.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS event_attendance (
+      id SERIAL PRIMARY KEY,
+      itinerary_item_id INTEGER NOT NULL REFERENCES itinerary_items(id) ON DELETE CASCADE,
+      entity_type TEXT NOT NULL CHECK (entity_type IN ('participant','host_member')),
+      entity_id INTEGER NOT NULL,
+      checked_in_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      checked_in_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      UNIQUE(itinerary_item_id, entity_type, entity_id)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS event_attendance_item_idx ON event_attendance(itinerary_item_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS event_attendance_entity_idx ON event_attendance(entity_type, entity_id);`);
+  // Note: no scan_point CHECK change needed here — 'registration' was
+  // already a valid value (see the multi-point-scanning migration above),
+  // it just had no scan action of its own yet, only piggybacking on the
+  // universal gate check-in. It now also grants the /attendance-scan
+  // action below (badge.js), same role, no schema change required.
 }
 
 module.exports = { pool, all, get, run, transaction, initSchema };
