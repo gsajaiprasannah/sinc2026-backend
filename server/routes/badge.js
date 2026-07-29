@@ -574,7 +574,7 @@ staffRouter.post('/staff/:token/attendance-scan', requireCap('registration'), as
       [itineraryItemId, type, row.id]
     );
     if (existing) {
-      return res.json({ marked: true, alreadyMarked: true, checked_in_at: existing.checked_in_at, event: item });
+      return res.json({ marked: true, alreadyMarked: true, checked_in_at: existing.checked_in_at, event: item, name: row.name });
     }
     const result = await db.run(
       `INSERT INTO event_attendance (itinerary_item_id, entity_type, entity_id, checked_in_by_user_id)
@@ -582,7 +582,7 @@ staffRouter.post('/staff/:token/attendance-scan', requireCap('registration'), as
       [itineraryItemId, type, row.id, req.user.id]
     );
     await recordScan({ entityType: type, entityId: row.id, scanPoint: 'registration', userId: req.user.id, meta: { itinerary_item_id: Number(itineraryItemId) } });
-    res.json({ marked: true, alreadyMarked: false, checked_in_at: result.rows[0].checked_in_at, event: item });
+    res.json({ marked: true, alreadyMarked: false, checked_in_at: result.rows[0].checked_in_at, event: item, name: row.name });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
