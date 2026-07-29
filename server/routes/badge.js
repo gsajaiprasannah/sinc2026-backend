@@ -69,6 +69,17 @@ async function findByToken(token) {
 
 const ENTITY_COLUMN = { participant: 'participant_id', host_member: 'host_member_id' };
 
+// A scanning login's own "who am I as a goodies courier" identity — a
+// host_member or volunteer login is linked back to its own row via
+// users.host_member_id/volunteer_id (see auth.js's LINKED_ROLE_FIELDS);
+// admin/super_admin have neither, so they can still see/deliver anything
+// unassigned but never "their own" custody list.
+function myCustodianIdentity(user) {
+  if (user.host_member_id) return { type: 'host_member', id: user.host_member_id };
+  if (user.volunteer_id) return { type: 'volunteer', id: user.volunteer_id };
+  return null;
+}
+
 // --- 1. Public vCard-style view — safe-to-share fields only. No payment ---
 // info, no room/vehicle details, nothing that isn't already effectively on
 // the physical badge itself.
@@ -236,13 +247,25 @@ staffRouter.get('/staff/:token', async (req, res) => {
     }
 
     if (caps.inventory) {
-      payload.pending_goodies = await db.all(`
-        SELECT ind.id AS distribution_id, ii.name, ind.quantity
+      // Only items assigned to THIS courier (or not yet assigned to anyone
+      // in particular) show up as deliverable here — someone else's
+      // assigned goodies don't appear, so a courier can't accidentally hand
+      // out (and get credited for) stock that isn't actually in their hand.
+      // See db.js's assigned_custodian_type/id migration.
+      const mine = myCustodianIdentity(req.scanUser);
+      const rows = await db.all(`
+        SELECT ind.id AS distribution_id, ii.name, ind.quantity,
+          ind.assigned_custodian_type, ind.assigned_custodian_id
         FROM inventory_distributions ind
         JOIN inventory_items ii ON ii.id = ind.inventory_item_id
         WHERE ind.recipient_type = $1 AND ind.recipient_id = $2 AND ind.status != 'delivered'
         ORDER BY ind.id
       `, [type, row.id]);
+      payload.pending_goodies = rows.filter((r) =>
+        isSuperStaff
+        || !r.assigned_custodian_id
+        || (mine && r.assigned_custodian_type === mine.type && String(r.assigned_custodian_id) === String(mine.id))
+      );
     }
 
     res.json(payload);
@@ -442,12 +465,65 @@ staffRouter.post('/staff/:token/goodies/:distId/deliver', requireCap('inventory'
       [req.params.distId, type, row.id]
     );
     if (!dist) return res.status(404).json({ error: 'That item is not pending for this person.' });
+
+    // Someone else's assigned goodies can't be marked delivered from here —
+    // admin/super_admin (covering a gap) and unassigned stock are the only
+    // exceptions. Keeps "who has how many in charge" honest: a delivery
+    // only ever gets attributed to whoever was actually carrying it.
+    const isSuperStaff = req.scanUser.role === 'admin' || req.scanUser.role === 'super_admin';
+    const mine = myCustodianIdentity(req.scanUser);
+    const isMine = !dist.assigned_custodian_id
+      || (mine && dist.assigned_custodian_type === mine.type && String(dist.assigned_custodian_id) === String(mine.id));
+    if (!isSuperStaff && !isMine) {
+      return res.status(403).json({ error: 'This item is assigned to a different courier — not yours to deliver.' });
+    }
+
+    const deliveredByType = mine ? mine.type : (dist.assigned_custodian_type || null);
+    const deliveredById = mine ? mine.id : (dist.assigned_custodian_id || null);
     await db.run(
-      `UPDATE inventory_distributions SET status='delivered', delivered_by_host_member_id=COALESCE($1, delivered_by_host_member_id), delivered_at=NOW() WHERE id=$2`,
-      [req.scanUser.host_member_id || null, dist.id]
+      `UPDATE inventory_distributions SET status='delivered',
+        delivered_by_type=COALESCE($1, delivered_by_type),
+        delivered_by_id=COALESCE($2, delivered_by_id),
+        delivered_by_host_member_id=COALESCE($3, delivered_by_host_member_id),
+        delivered_at=NOW()
+       WHERE id=$4`,
+      [deliveredByType, deliveredById, deliveredByType === 'host_member' ? deliveredById : null, dist.id]
     );
     await recordScan({ entityType: type, entityId: row.id, scanPoint: 'goodies', userId: req.user.id, meta: { distribution_id: dist.id } });
     res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// --- Goodies: "who I need to deliver to" — a proactive checklist, seen ---
+// BEFORE scanning anyone, of every pending item currently assigned to this
+// courier (or their whole delivery run, if nothing's individually assigned
+// to them yet — same "unassigned = fair game" rule as pending_goodies
+// above). Answers "he will be informed of who it should be delivered to":
+// the courier sees the full list of recipients up front, not just whoever
+// happens to get scanned next.
+staffRouter.get('/my-goodies-checklist', requireCap('inventory'), async (req, res) => {
+  try {
+    const mine = myCustodianIdentity(req.scanUser);
+    if (!mine) return res.json([]);
+    const rows = await db.all(`
+      SELECT ind.id AS distribution_id, ind.quantity, ind.status, ind.delivered_at,
+        ii.id AS inventory_item_id, ii.name AS item_name, ii.unit,
+        ind.recipient_type, ind.recipient_id,
+        COALESCE(rs.name, rsp.name, rgv.name, rp.name, rhm.name) AS recipient_name,
+        COALESCE(rp.phone, rhm.phone) AS recipient_phone
+      FROM inventory_distributions ind
+      JOIN inventory_items ii ON ii.id = ind.inventory_item_id
+      LEFT JOIN sponsors rs ON ind.recipient_type='sponsor' AND ind.recipient_id = rs.id
+      LEFT JOIN speakers rsp ON ind.recipient_type='speaker' AND ind.recipient_id = rsp.id
+      LEFT JOIN guest_visitors rgv ON ind.recipient_type='guest_visitor' AND ind.recipient_id = rgv.id
+      LEFT JOIN participants rp ON ind.recipient_type='participant' AND ind.recipient_id = rp.id
+      LEFT JOIN host_members rhm ON ind.recipient_type='host_member' AND ind.recipient_id = rhm.id
+      WHERE ind.assigned_custodian_type = $1 AND ind.assigned_custodian_id = $2 AND ind.status != 'cancelled'
+      ORDER BY (ind.status = 'pending') DESC, ii.name, recipient_name
+    `, [mine.type, mine.id]);
+    res.json(rows);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

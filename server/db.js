@@ -1677,6 +1677,33 @@ async function initSchema() {
   await pool.query(`ALTER TABLE email_campaigns DROP CONSTRAINT IF EXISTS email_campaigns_audience_type_check;`);
   await pool.query(`ALTER TABLE email_campaigns ADD CONSTRAINT email_campaigns_audience_type_check CHECK (audience_type IN ('participant','host_member','volunteer','sponsor','speaker','guest_visitor','manual'));`);
 
+  // --- Goodies & Inventory: custodian handoffs -----------------------------
+  // "Assigned to" and "delivered by" were host_member-only (assigned_
+  // host_member_id / delivered_by_host_member_id above) — a volunteer could
+  // never be handed goods to run out and deliver. These generalized
+  // type+id pairs are the new source of truth for BOTH roles; the legacy
+  // host_member-only columns are left in place (never dropped) so nothing
+  // that already reads them breaks, and are kept mirrored whenever the
+  // custodian IS a host member, so old and new columns never disagree.
+  // assigned_custodian_* is who's currently carrying the stock and who it's
+  // meant for ("in charge of" — the courier's own checklist, surfaced via
+  // GET /api/badge/my-goodies-checklist); delivered_by_* is stamped once
+  // they actually scan the recipient and hand it over.
+  await pool.query(`ALTER TABLE inventory_distributions ADD COLUMN IF NOT EXISTS assigned_custodian_type TEXT;`);
+  await pool.query(`ALTER TABLE inventory_distributions DROP CONSTRAINT IF EXISTS inventory_distributions_assigned_custodian_type_check;`);
+  await pool.query(`ALTER TABLE inventory_distributions ADD CONSTRAINT inventory_distributions_assigned_custodian_type_check CHECK (assigned_custodian_type IS NULL OR assigned_custodian_type IN ('host_member','volunteer'));`);
+  await pool.query(`ALTER TABLE inventory_distributions ADD COLUMN IF NOT EXISTS assigned_custodian_id INTEGER;`);
+  await pool.query(`ALTER TABLE inventory_distributions ADD COLUMN IF NOT EXISTS delivered_by_type TEXT;`);
+  await pool.query(`ALTER TABLE inventory_distributions DROP CONSTRAINT IF EXISTS inventory_distributions_delivered_by_type_check;`);
+  await pool.query(`ALTER TABLE inventory_distributions ADD CONSTRAINT inventory_distributions_delivered_by_type_check CHECK (delivered_by_type IS NULL OR delivered_by_type IN ('host_member','volunteer'));`);
+  await pool.query(`ALTER TABLE inventory_distributions ADD COLUMN IF NOT EXISTS delivered_by_id INTEGER;`);
+  // Backfill from the legacy columns so existing assignments/deliveries show
+  // up under the new generalized pair immediately, without waiting for
+  // someone to re-save each row.
+  await pool.query(`UPDATE inventory_distributions SET assigned_custodian_type='host_member', assigned_custodian_id=assigned_host_member_id WHERE assigned_host_member_id IS NOT NULL AND assigned_custodian_id IS NULL;`);
+  await pool.query(`UPDATE inventory_distributions SET delivered_by_type='host_member', delivered_by_id=delivered_by_host_member_id WHERE delivered_by_host_member_id IS NOT NULL AND delivered_by_id IS NULL;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS inventory_distributions_custodian_idx ON inventory_distributions(assigned_custodian_type, assigned_custodian_id);`);
+
   // --- Transport boarding status -------------------------------------------
   // The QR "Transport Scan" action (server/routes/badge.js) used to only
   // check the scanning login's own assigned vehicle — now the scanner picks

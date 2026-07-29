@@ -34,6 +34,22 @@ const RECIPIENT_NAME_JOIN = `
 `;
 const RECIPIENT_NAME_SELECT = `COALESCE(rs.name, rsp.name, rgv.name, rp.name, rhm.name) AS recipient_name`;
 
+// "Assigned to" (who's carrying it right now, i.e. the courier/custodian)
+// and "delivered by" (who actually scanned it over) can each be a host
+// member OR a volunteer — see db.js's assigned_custodian_type/id and
+// delivered_by_type/id migration. Joined against both tables the same
+// polymorphic-name way as RECIPIENT_NAME_JOIN above.
+const CUSTODIAN_JOIN = `
+  LEFT JOIN host_members achm ON d.assigned_custodian_type='host_member' AND achm.id = d.assigned_custodian_id
+  LEFT JOIN volunteers acv ON d.assigned_custodian_type='volunteer' AND acv.id = d.assigned_custodian_id
+  LEFT JOIN host_members dbhm ON d.delivered_by_type='host_member' AND dbhm.id = d.delivered_by_id
+  LEFT JOIN volunteers dbv ON d.delivered_by_type='volunteer' AND dbv.id = d.delivered_by_id
+`;
+const CUSTODIAN_SELECT = `
+  COALESCE(achm.name, acv.name) AS assigned_custodian_name,
+  COALESCE(dbhm.name, dbv.name) AS delivered_by_name
+`;
+
 // --- Item master (the stock list) ---
 
 router.get('/', async (req, res) => {
@@ -133,6 +149,16 @@ router.get('/participants-lite', async (req, res) => {
 router.get('/host-members-lite', async (req, res) => {
   try {
     const rows = await db.all(`SELECT id, name, company FROM host_members ORDER BY name`);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+// Volunteers can now be a custodian ("assigned to") too, same as host
+// members above — see the assigned_custodian_type/id migration in db.js.
+router.get('/volunteers-lite', async (req, res) => {
+  try {
+    const rows = await db.all(`SELECT id, name, organization FROM volunteers ORDER BY name`);
     res.json(rows);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -489,11 +515,10 @@ router.delete('/:id', async (req, res) => {
 router.get('/:itemId/distributions', async (req, res) => {
   try {
     const rows = await db.all(`
-      SELECT d.*, ${RECIPIENT_NAME_SELECT}, am.name AS assigned_host_member_name, dm.name AS delivered_by_name
+      SELECT d.*, ${RECIPIENT_NAME_SELECT}, ${CUSTODIAN_SELECT}
       FROM inventory_distributions d
       ${RECIPIENT_NAME_JOIN}
-      LEFT JOIN host_members am ON am.id = d.assigned_host_member_id
-      LEFT JOIN host_members dm ON dm.id = d.delivered_by_host_member_id
+      ${CUSTODIAN_JOIN}
       WHERE d.inventory_item_id=$1
       ORDER BY d.id
     `, [req.params.itemId]);
@@ -503,17 +528,31 @@ router.get('/:itemId/distributions', async (req, res) => {
   }
 });
 
+// Accepts either the new generalized assigned_custodian_type/assigned_
+// custodian_id pair, OR the legacy assigned_host_member_id shorthand (kept
+// working for anything still calling this the old way) — whichever is
+// given, both the new columns AND the legacy host-member column end up
+// populated together so they never disagree (see db.js's migration note).
+function resolveCustodian(body) {
+  let type = body.assigned_custodian_type || null;
+  let id = body.assigned_custodian_id || null;
+  if (!type && body.assigned_host_member_id) { type = 'host_member'; id = body.assigned_host_member_id; }
+  if (type && !['host_member', 'volunteer'].includes(type)) throw new Error("assigned_custodian_type must be 'host_member' or 'volunteer'");
+  return { type: id ? type : null, id: type ? id : null, legacyHostMemberId: type === 'host_member' ? id : null };
+}
+
 router.post('/:itemId/distributions', async (req, res) => {
-  const { recipient_type, recipient_id, quantity, assigned_host_member_id, notes } = req.body;
+  const { recipient_type, recipient_id, quantity, notes } = req.body;
   if (!RECIPIENT_TYPES.includes(recipient_type)) {
     return res.status(400).json({ error: `recipient_type must be one of: ${RECIPIENT_TYPES.join(', ')}` });
   }
   if (!recipient_id) return res.status(400).json({ error: 'recipient_id is required' });
   try {
+    const custodian = resolveCustodian(req.body);
     const result = await db.run(`
-      INSERT INTO inventory_distributions (inventory_item_id, recipient_type, recipient_id, quantity, assigned_host_member_id, notes)
-      VALUES ($1,$2,$3,$4,$5,$6) RETURNING id
-    `, [req.params.itemId, recipient_type, recipient_id, Number(quantity) || 1, assigned_host_member_id || null, notes || '']);
+      INSERT INTO inventory_distributions (inventory_item_id, recipient_type, recipient_id, quantity, assigned_custodian_type, assigned_custodian_id, assigned_host_member_id, notes)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id
+    `, [req.params.itemId, recipient_type, recipient_id, Number(quantity) || 1, custodian.type, custodian.id, custodian.legacyHostMemberId, notes || '']);
     res.json({ id: result.id });
   } catch (e) {
     if (e.message && e.message.includes('inventory_distributions_inventory_item_id_recipient_type_recipient_id_key')) {
@@ -529,21 +568,22 @@ router.post('/:itemId/distributions', async (req, res) => {
 // distribution record for this item so it can be safely re-run as new
 // entities are added, without creating duplicates.
 router.post('/:itemId/distributions/bulk', async (req, res) => {
-  const { recipient_type, quantity, assigned_host_member_id } = req.body;
+  const { recipient_type, quantity } = req.body;
   if (!RECIPIENT_TYPES.includes(recipient_type)) {
     return res.status(400).json({ error: `recipient_type must be one of: ${RECIPIENT_TYPES.join(', ')}` });
   }
   const table = RECIPIENT_TABLES[recipient_type];
   try {
+    const custodian = resolveCustodian(req.body);
     const result = await db.run(`
-      INSERT INTO inventory_distributions (inventory_item_id, recipient_type, recipient_id, quantity, assigned_host_member_id)
-      SELECT $1, $2, e.id, $3, $4
+      INSERT INTO inventory_distributions (inventory_item_id, recipient_type, recipient_id, quantity, assigned_custodian_type, assigned_custodian_id, assigned_host_member_id)
+      SELECT $1, $2, e.id, $3, $4, $5, $6
       FROM ${table} e
       WHERE NOT EXISTS (
         SELECT 1 FROM inventory_distributions d WHERE d.inventory_item_id=$1 AND d.recipient_type=$2 AND d.recipient_id=e.id
       )
       RETURNING id
-    `, [req.params.itemId, recipient_type, Number(quantity) || 1, assigned_host_member_id || null]);
+    `, [req.params.itemId, recipient_type, Number(quantity) || 1, custodian.type, custodian.id, custodian.legacyHostMemberId]);
     res.json({ created: result.rowCount });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -557,9 +597,19 @@ router.put('/distributions/:id', async (req, res) => {
     const body = req.body;
     const quantity = body.quantity !== undefined ? Number(body.quantity) : existing.quantity;
     const notes = body.notes !== undefined ? body.notes : existing.notes;
-    // Not COALESCE'd — explicit null clears the assignment; omitting leaves it untouched.
-    const assigned_host_member_id = body.assigned_host_member_id !== undefined
-      ? (body.assigned_host_member_id || null) : existing.assigned_host_member_id;
+    // Not COALESCE'd — explicit clearing removes the assignment; omitting
+    // the field(s) leaves it untouched. Accepts either the new generalized
+    // type/id pair or the legacy assigned_host_member_id shorthand.
+    let assigned_custodian_type = existing.assigned_custodian_type;
+    let assigned_custodian_id = existing.assigned_custodian_id;
+    let assigned_host_member_id = existing.assigned_host_member_id;
+    if (body.assigned_custodian_type !== undefined || body.assigned_custodian_id !== undefined) {
+      const c = resolveCustodian(body);
+      assigned_custodian_type = c.type; assigned_custodian_id = c.id; assigned_host_member_id = c.legacyHostMemberId;
+    } else if (body.assigned_host_member_id !== undefined) {
+      const c = resolveCustodian({ assigned_host_member_id: body.assigned_host_member_id });
+      assigned_custodian_type = c.type; assigned_custodian_id = c.id; assigned_host_member_id = c.legacyHostMemberId;
+    }
     const status = body.status !== undefined ? body.status : existing.status;
 
     // Delivered-by + delivered-at is a stamped audit trail, not a plain
@@ -567,26 +617,40 @@ router.put('/distributions/:id', async (req, res) => {
     // (defaulting to whoever was assigned, since that's usually who
     // actually did it — overridable if a stand-in delivered instead), and
     // cleared if the item is reopened back to pending/cancelled.
+    let delivered_by_type = existing.delivered_by_type;
+    let delivered_by_id = existing.delivered_by_id;
     let delivered_by_host_member_id = existing.delivered_by_host_member_id;
-    let delivered_at = existing.delivered_at;
+    const setDeliveredBy = (type, id) => {
+      delivered_by_type = type; delivered_by_id = id;
+      delivered_by_host_member_id = type === 'host_member' ? id : null;
+    };
     if (status === 'delivered' && existing.status !== 'delivered') {
-      delivered_by_host_member_id = body.delivered_by_host_member_id !== undefined
-        ? (body.delivered_by_host_member_id || null)
-        : (assigned_host_member_id || null);
-      delivered_at = new Date();
+      if (body.delivered_by_type !== undefined || body.delivered_by_id !== undefined) {
+        setDeliveredBy(body.delivered_by_type || null, body.delivered_by_id || null);
+      } else if (body.delivered_by_host_member_id !== undefined) {
+        setDeliveredBy(body.delivered_by_host_member_id ? 'host_member' : null, body.delivered_by_host_member_id || null);
+      } else {
+        setDeliveredBy(assigned_custodian_type, assigned_custodian_id);
+      }
     } else if (status !== 'delivered' && existing.status === 'delivered') {
+      setDeliveredBy(null, null);
       delivered_by_host_member_id = null;
-      delivered_at = null;
+    } else if (body.delivered_by_type !== undefined || body.delivered_by_id !== undefined) {
+      setDeliveredBy(body.delivered_by_type || null, body.delivered_by_id || null);
     } else if (body.delivered_by_host_member_id !== undefined) {
-      delivered_by_host_member_id = body.delivered_by_host_member_id || null;
+      setDeliveredBy(body.delivered_by_host_member_id ? 'host_member' : null, body.delivered_by_host_member_id || null);
     }
+    const delivered_at = (status === 'delivered' && existing.status !== 'delivered') ? new Date()
+      : (status !== 'delivered' && existing.status === 'delivered') ? null
+      : existing.delivered_at;
 
     await db.run(`
       UPDATE inventory_distributions SET
-        quantity=$1, notes=$2, assigned_host_member_id=$3, status=$4,
-        delivered_by_host_member_id=$5, delivered_at=$6, updated_at=NOW()
-      WHERE id=$7
-    `, [quantity, notes, assigned_host_member_id, status, delivered_by_host_member_id, delivered_at, req.params.id]);
+        quantity=$1, notes=$2, assigned_custodian_type=$3, assigned_custodian_id=$4, assigned_host_member_id=$5,
+        status=$6, delivered_by_type=$7, delivered_by_id=$8, delivered_by_host_member_id=$9, delivered_at=$10, updated_at=NOW()
+      WHERE id=$11
+    `, [quantity, notes, assigned_custodian_type, assigned_custodian_id, assigned_host_member_id,
+        status, delivered_by_type, delivered_by_id, delivered_by_host_member_id, delivered_at, req.params.id]);
     if (status === 'delivered' && existing.status !== 'delivered') {
       const item = await db.get('SELECT name FROM inventory_items WHERE id=$1', [existing.inventory_item_id]);
       logActivity(req.user, { action: 'deliver', entityType: 'inventory_distribution', entityId: Number(req.params.id), label: item?.name, details: `to ${existing.recipient_type} #${existing.recipient_id}` });
@@ -647,17 +711,43 @@ router.get('/monitor', async (req, res) => {
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
     const rows = await db.all(`
       SELECT d.*, i.name AS item_name, i.category AS item_category,
-        c.name AS committee_name, ${RECIPIENT_NAME_SELECT},
-        am.name AS assigned_host_member_name, dm.name AS delivered_by_name
+        c.name AS committee_name, ${RECIPIENT_NAME_SELECT}, ${CUSTODIAN_SELECT}
       FROM inventory_distributions d
       JOIN inventory_items i ON i.id = d.inventory_item_id
       LEFT JOIN committees c ON c.id = i.responsible_committee_id
       ${RECIPIENT_NAME_JOIN}
-      LEFT JOIN host_members am ON am.id = d.assigned_host_member_id
-      LEFT JOIN host_members dm ON dm.id = d.delivered_by_host_member_id
+      ${CUSTODIAN_JOIN}
       ${where}
       ORDER BY (d.status='pending') DESC, d.id
     `, params);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// --- "Who has what in charge" — one row per custodian who's currently ---
+// carrying stock (i.e. has at least one item assigned to them), rolled up
+// across every item: how many units are still pending delivery (in their
+// hand right now) vs already delivered. This is the answer to "who has how
+// many products in charge" — the courier's own view of the same data is
+// GET /api/badge/my-goodies-checklist (badge.js), scoped to just themself.
+router.get('/custody-summary', async (req, res) => {
+  try {
+    const rows = await db.all(`
+      SELECT d.assigned_custodian_type AS custodian_type, d.assigned_custodian_id AS custodian_id,
+        COALESCE(hm.name, v.name) AS custodian_name,
+        COUNT(*) FILTER (WHERE d.status='pending')::int AS pending_count,
+        COALESCE(SUM(d.quantity) FILTER (WHERE d.status='pending'), 0)::int AS pending_quantity,
+        COUNT(*) FILTER (WHERE d.status='delivered')::int AS delivered_count,
+        COALESCE(SUM(d.quantity) FILTER (WHERE d.status='delivered'), 0)::int AS delivered_quantity
+      FROM inventory_distributions d
+      LEFT JOIN host_members hm ON d.assigned_custodian_type='host_member' AND hm.id = d.assigned_custodian_id
+      LEFT JOIN volunteers v ON d.assigned_custodian_type='volunteer' AND v.id = d.assigned_custodian_id
+      WHERE d.assigned_custodian_id IS NOT NULL AND d.status != 'cancelled'
+      GROUP BY d.assigned_custodian_type, d.assigned_custodian_id, hm.name, v.name
+      ORDER BY pending_quantity DESC, custodian_name
+    `);
     res.json(rows);
   } catch (e) {
     res.status(500).json({ error: e.message });
