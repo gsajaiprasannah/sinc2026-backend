@@ -289,22 +289,83 @@ staffRouter.post('/staff/:token/hotel-checkout', requireCap('hotel_desk'), async
   }
 });
 
-// --- Transport boarding: flags whether this person is boarding the RIGHT ---
-// vehicle — "right" meaning the vehicle assigned to the scanning login
-// (users.vehicle_id, set from Settings -> Change role -> Assigned vehicle),
-// compared against whichever of today's trips this person is actually
-// booked on. A scanner with no vehicle_id of their own (a generic
-// scan_point='transport' gate, or an admin covering the desk) still gets
-// useful output — it just can't say "match", only "here's who they should
-// board".
+// --- Transport: today's trips, for the scanner to pick from before ---------
+// scanning anyone. Deliberately not scoped to the scanning login's own
+// vehicle_id (a scanner may cover more than one vehicle across the day, or
+// be a generic scan_point='transport' desk with no vehicle of its own) — it
+// lists every trip scheduled for today so the scanner can pick the exact
+// route/vehicle/driver they're standing at right now.
+staffRouter.get('/transport-trips-today', requireCap('transport'), async (req, res) => {
+  try {
+    const trips = await db.all(`
+      SELECT t.id, t.trip_type, t.from_location, t.to_location, t.depart_time,
+        v.vehicle_code, v.vehicle_type, v.seating_capacity,
+        d.name AS driver_name, d.phone AS driver_phone,
+        (SELECT COUNT(*) FROM transport_trip_passengers tp WHERE tp.trip_id = t.id) AS passenger_count,
+        (SELECT COUNT(*) FROM transport_trip_passengers tp WHERE tp.trip_id = t.id AND tp.boarded_at IS NOT NULL) AS boarded_count
+      FROM transport_trips t
+      LEFT JOIN vehicles v ON v.id = t.vehicle_id
+      LEFT JOIN drivers d ON d.id = t.driver_id
+      WHERE t.trip_date = CURRENT_DATE
+      ORDER BY t.depart_time NULLS LAST, t.id
+    `);
+    res.json(trips);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// --- Transport boarding: checks this person against the SPECIFIC trip the ---
+// scanner picked from the dropdown above (trip_id, in the request body) —
+// not the scanning login's own vehicle_id, since the scanner may be
+// covering any of several vehicles today. A match marks that passenger row
+// boarded (so the Transport Planning manifest reflects it immediately); a
+// mismatch looks up whichever of today's OTHER trips this person actually
+// is on, so the scanner can be told the correct vehicle/driver on the spot.
 staffRouter.post('/staff/:token/transport-scan', requireCap('transport'), async (req, res) => {
   try {
+    const tripId = req.body.trip_id;
+    if (!tripId) return res.status(400).json({ error: 'Select a trip before scanning.' });
     const found = await findByToken(req.params.token);
     if (!found) return res.status(404).json({ error: 'Badge not found' });
     const { type, row } = found;
     const col = ENTITY_COLUMN[type];
-    const trips = await db.all(`
-      SELECT t.id, t.vehicle_id, t.from_location, t.to_location, t.depart_time,
+
+    const trip = await db.get(`
+      SELECT t.id, t.from_location, t.to_location, t.depart_time,
+        v.vehicle_code, d.name AS driver_name, d.phone AS driver_phone
+      FROM transport_trips t
+      LEFT JOIN vehicles v ON v.id = t.vehicle_id
+      LEFT JOIN drivers d ON d.id = t.driver_id
+      WHERE t.id = $1
+    `, [tripId]);
+    if (!trip) return res.status(404).json({ error: 'That trip no longer exists — refresh the trip list.' });
+
+    const onThisTrip = await db.get(
+      `SELECT id, boarded_at FROM transport_trip_passengers WHERE trip_id = $1 AND ${col} = $2`,
+      [tripId, row.id]
+    );
+
+    if (onThisTrip) {
+      const tripInfo = { from_location: trip.from_location, to_location: trip.to_location, depart_time: trip.depart_time, vehicle_code: trip.vehicle_code };
+      if (onThisTrip.boarded_at) {
+        await recordScan({ entityType: type, entityId: row.id, scanPoint: 'transport', userId: req.user.id, meta: { result: 'already_boarded', trip_id: trip.id } });
+        return res.json({ match: true, alreadyBoarded: true, boarded_at: onThisTrip.boarded_at, trip: tripInfo });
+      }
+      const boarded_at = new Date();
+      await db.run(
+        `UPDATE transport_trip_passengers SET boarded_at = NOW(), boarded_by_user_id = $1 WHERE id = $2`,
+        [req.user.id, onThisTrip.id]
+      );
+      await recordScan({ entityType: type, entityId: row.id, scanPoint: 'transport', userId: req.user.id, meta: { result: 'match', trip_id: trip.id } });
+      return res.json({ match: true, alreadyBoarded: false, boarded_at, trip: tripInfo });
+    }
+
+    // Not on the selected trip — find whichever of today's OTHER trips this
+    // person IS actually booked on, so the scanner can be told the correct
+    // vehicle instead of just "wrong vehicle".
+    const otherTrips = await db.all(`
+      SELECT t.id, t.from_location, t.to_location, t.depart_time,
         v.vehicle_code, d.name AS driver_name, d.phone AS driver_phone
       FROM transport_trip_passengers tp
       JOIN transport_trips t ON t.id = tp.trip_id
@@ -313,18 +374,13 @@ staffRouter.post('/staff/:token/transport-scan', requireCap('transport'), async 
       WHERE tp.${col} = $1 AND t.trip_date = CURRENT_DATE
       ORDER BY t.depart_time
     `, [row.id]);
-    if (!trips.length) {
-      await recordScan({ entityType: type, entityId: row.id, scanPoint: 'transport', userId: req.user.id, meta: { result: 'unassigned' } });
-      return res.json({ assigned: false, message: 'No transport assignment found for this person today.' });
+
+    if (!otherTrips.length) {
+      await recordScan({ entityType: type, entityId: row.id, scanPoint: 'transport', userId: req.user.id, meta: { result: 'unassigned', attempted_trip_id: trip.id } });
+      return res.json({ match: false, assigned: false, message: 'No transport assignment found for this person today.' });
     }
-    const myVehicleId = req.scanUser.vehicle_id;
-    const matchTrip = myVehicleId ? trips.find((t) => t.vehicle_id === myVehicleId) : null;
-    if (matchTrip) {
-      await recordScan({ entityType: type, entityId: row.id, scanPoint: 'transport', userId: req.user.id, meta: { result: 'match', trip_id: matchTrip.id } });
-      return res.json({ match: true, trip: { from_location: matchTrip.from_location, to_location: matchTrip.to_location, depart_time: matchTrip.depart_time } });
-    }
-    const t = trips[0];
-    await recordScan({ entityType: type, entityId: row.id, scanPoint: 'transport', userId: req.user.id, meta: { result: 'mismatch', trip_id: t.id } });
+    const t = otherTrips[0];
+    await recordScan({ entityType: type, entityId: row.id, scanPoint: 'transport', userId: req.user.id, meta: { result: 'mismatch', attempted_trip_id: trip.id, correct_trip_id: t.id } });
     res.json({
       match: false, assigned: true,
       correctTrip: { vehicle_code: t.vehicle_code, driver_name: t.driver_name, driver_phone: t.driver_phone, from_location: t.from_location, to_location: t.to_location, depart_time: t.depart_time }

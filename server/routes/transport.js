@@ -37,7 +37,8 @@ router.get('/', async (req, res) => {
       SELECT t.*, v.vehicle_code, v.vehicle_type, v.model AS vehicle_model, v.seating_capacity,
         d.name AS driver_name, d.phone AS driver_phone,
         p.name AS partner_name,
-        (SELECT COUNT(*) FROM transport_trip_passengers tp WHERE tp.trip_id = t.id) AS passenger_count
+        (SELECT COUNT(*) FROM transport_trip_passengers tp WHERE tp.trip_id = t.id) AS passenger_count,
+        (SELECT COUNT(*) FROM transport_trip_passengers tp WHERE tp.trip_id = t.id AND tp.boarded_at IS NOT NULL) AS boarded_count
       FROM transport_trips t
       LEFT JOIN vehicles v ON v.id = t.vehicle_id
       LEFT JOIN drivers d ON d.id = t.driver_id
@@ -262,10 +263,12 @@ router.get('/:id', async (req, res) => {
     const passengers = await db.all(`
       SELECT tp.*,
         p.name AS participant_name, p.phone AS participant_phone, p.participant_code,
-        hm.name AS host_member_name, hm.phone AS host_member_phone
+        hm.name AS host_member_name, hm.phone AS host_member_phone,
+        u.username AS boarded_by_username
       FROM transport_trip_passengers tp
       LEFT JOIN participants p ON p.id = tp.participant_id
       LEFT JOIN host_members hm ON hm.id = tp.host_member_id
+      LEFT JOIN users u ON u.id = tp.boarded_by_user_id
       WHERE tp.trip_id = $1
       ORDER BY tp.created_at
     `, [req.params.id]);

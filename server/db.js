@@ -1676,6 +1676,16 @@ async function initSchema() {
   await pool.query(`ALTER TABLE email_campaigns ADD COLUMN IF NOT EXISTS manual_recipients TEXT;`);
   await pool.query(`ALTER TABLE email_campaigns DROP CONSTRAINT IF EXISTS email_campaigns_audience_type_check;`);
   await pool.query(`ALTER TABLE email_campaigns ADD CONSTRAINT email_campaigns_audience_type_check CHECK (audience_type IN ('participant','host_member','volunteer','sponsor','speaker','guest_visitor','manual'));`);
+
+  // --- Transport boarding status -------------------------------------------
+  // The QR "Transport Scan" action (server/routes/badge.js) used to only
+  // check the scanning login's own assigned vehicle — now the scanner picks
+  // the exact trip (route + vehicle + driver) from a dropdown first, and a
+  // successful scan against that trip marks THIS passenger row boarded, so
+  // the Transport Planning manifest (server/routes/transport.js GET /:id)
+  // can show who's actually on the vehicle, not just who was planned onto it.
+  await pool.query(`ALTER TABLE transport_trip_passengers ADD COLUMN IF NOT EXISTS boarded_at TIMESTAMP;`);
+  await pool.query(`ALTER TABLE transport_trip_passengers ADD COLUMN IF NOT EXISTS boarded_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL;`);
 }
 
 module.exports = { pool, all, get, run, transaction, initSchema };
