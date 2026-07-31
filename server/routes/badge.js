@@ -338,6 +338,43 @@ staffRouter.get('/transport-trips-today', requireCap('transport'), async (req, r
   }
 });
 
+// --- Who's boarded this trip so far — for display right in the scanner ---
+// screen (login.js's "My Scans" tab), so whoever's boarding passengers can
+// see the live roster without needing Transport Planning module access
+// (that admin route is requireAdminRole-only; a plain scan_point='transport'
+// or vehicle_id login has neither admin nor committee-portal access, only
+// this scan capability). Same underlying data as transport.js's GET /:id,
+// just re-exposed under the requireCap('transport') gate those logins do have.
+staffRouter.get('/transport-trip/:tripId/passengers', requireCap('transport'), async (req, res) => {
+  try {
+    const trip = await db.get(`
+      SELECT t.id, t.from_location, t.to_location, t.depart_time,
+        v.vehicle_code, d.name AS driver_name
+      FROM transport_trips t
+      LEFT JOIN vehicles v ON v.id = t.vehicle_id
+      LEFT JOIN drivers d ON d.id = t.driver_id
+      WHERE t.id = $1
+    `, [req.params.tripId]);
+    if (!trip) return res.status(404).json({ error: 'Trip not found' });
+    const passengers = await db.all(`
+      SELECT tp.id, tp.boarded_at,
+        COALESCE(p.name, hm.name) AS name,
+        COALESCE(p.phone, hm.phone) AS phone,
+        CASE WHEN tp.participant_id IS NOT NULL THEN 'participant' ELSE 'host_member' END AS entity_type,
+        u.username AS boarded_by_username
+      FROM transport_trip_passengers tp
+      LEFT JOIN participants p ON p.id = tp.participant_id
+      LEFT JOIN host_members hm ON hm.id = tp.host_member_id
+      LEFT JOIN users u ON u.id = tp.boarded_by_user_id
+      WHERE tp.trip_id = $1
+      ORDER BY tp.boarded_at NULLS LAST, tp.created_at
+    `, [req.params.tripId]);
+    res.json({ trip, passengers });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // --- Transport boarding: checks this person against the SPECIFIC trip the ---
 // scanner picked from the dropdown above (trip_id, in the request body) —
 // not the scanning login's own vehicle_id, since the scanner may be

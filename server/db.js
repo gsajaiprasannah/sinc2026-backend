@@ -1745,6 +1745,51 @@ async function initSchema() {
   // it just had no scan action of its own yet, only piggybacking on the
   // universal gate check-in. It now also grants the /attendance-scan
   // action below (badge.js), same role, no schema change required.
+
+  // --- Transport: "Other / Guest" passengers -------------------------------
+  // A trip's passenger manifest used to require exactly one of participant_id
+  // or host_member_id — every rider had to already be a registered delegate
+  // or host member. Some trips carry people who are neither (vendor staff,
+  // a walk-in guest, an extra family member), so guest_name/guest_phone add a
+  // third, free-text identity alongside the other two. These rows have NO
+  // badge_token anywhere in the system, so they can never be marked boarded
+  // via a QR scan — boarding for a guest row is a manual toggle instead (see
+  // PUT /transport/:id/passengers/:passengerId/board in transport.js).
+  await pool.query(`ALTER TABLE transport_trip_passengers ADD COLUMN IF NOT EXISTS guest_name TEXT;`);
+  await pool.query(`ALTER TABLE transport_trip_passengers ADD COLUMN IF NOT EXISTS guest_phone TEXT;`);
+  // The original CHECK (added inline and unnamed in the CREATE TABLE above)
+  // enforced exactly-one-of participant/host-member with no room for a guest
+  // row. Find and drop it dynamically by its definition rather than guessing
+  // Postgres's auto-generated constraint name.
+  await pool.query(`
+    DO $$
+    DECLARE cname text;
+    BEGIN
+      SELECT conname INTO cname FROM pg_constraint
+      WHERE conrelid = 'transport_trip_passengers'::regclass AND contype = 'c'
+        AND pg_get_constraintdef(oid) LIKE '%host_member_id IS NULL%';
+      IF cname IS NOT NULL THEN
+        EXECUTE format('ALTER TABLE transport_trip_passengers DROP CONSTRAINT %I', cname);
+      END IF;
+    END $$;
+  `);
+  await pool.query(`ALTER TABLE transport_trip_passengers DROP CONSTRAINT IF EXISTS transport_trip_passengers_identity_check;`);
+  await pool.query(`
+    ALTER TABLE transport_trip_passengers ADD CONSTRAINT transport_trip_passengers_identity_check CHECK (
+      (participant_id IS NOT NULL AND host_member_id IS NULL AND guest_name IS NULL) OR
+      (participant_id IS NULL AND host_member_id IS NOT NULL AND guest_name IS NULL) OR
+      (participant_id IS NULL AND host_member_id IS NULL AND guest_name IS NOT NULL)
+    );
+  `);
+
+  // --- Transport: transporter's own "approved" acknowledgement -------------
+  // A simple confirmation flag the transport vendor sets from their own
+  // portal (see PUT /transporter-portal/trips/:id/approve) — separate from
+  // the operational status (planned/in_progress/completed/cancelled), purely
+  // to tell admin/committee "the vendor has seen and accepted this trip".
+  // Nothing else is gated on it; an unapproved trip works exactly as before.
+  await pool.query(`ALTER TABLE transport_trips ADD COLUMN IF NOT EXISTS transporter_approved_at TIMESTAMP;`);
+  await pool.query(`ALTER TABLE transport_trips ADD COLUMN IF NOT EXISTS transporter_approved_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL;`);
 }
 
 module.exports = { pool, all, get, run, transaction, initSchema };

@@ -331,19 +331,26 @@ router.delete('/:id', async (req, res) => {
 });
 
 // --- Passenger manifest ---
+// A passenger row is exactly one of: a delegate, a host member, or a
+// free-text "guest" (vendor staff, walk-in, extra family member — anyone
+// with no registration record at all). guest_name is the tell for which
+// case this is; see the identity CHECK constraint added in db.js.
 router.post('/:id/passengers', async (req, res) => {
-  const { participant_id, host_member_id, pickup_point, notes } = req.body;
-  if (!participant_id && !host_member_id) {
-    return res.status(400).json({ error: 'Select a delegate or a host member to add as a passenger.' });
+  const { participant_id, host_member_id, guest_name, guest_phone, pickup_point, notes } = req.body;
+  const identityCount = [participant_id, host_member_id, guest_name].filter(Boolean).length;
+  if (identityCount === 0) {
+    return res.status(400).json({ error: 'Select a delegate, a host member, or enter a guest name.' });
   }
-  if (participant_id && host_member_id) {
-    return res.status(400).json({ error: 'A passenger row is either a delegate or a host member, not both.' });
+  if (identityCount > 1) {
+    return res.status(400).json({ error: 'A passenger row is a delegate, a host member, or a guest — not more than one.' });
   }
   try {
     const result = await db.run(`
-      INSERT INTO transport_trip_passengers (trip_id, participant_id, host_member_id, pickup_point, notes)
-      VALUES ($1,$2,$3,$4,$5) RETURNING id
-    `, [req.params.id, participant_id || null, host_member_id || null, pickup_point || '', notes || '']);
+      INSERT INTO transport_trip_passengers (trip_id, participant_id, host_member_id, guest_name, guest_phone, pickup_point, notes)
+      VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id
+    `, [req.params.id, participant_id || null, host_member_id || null,
+        guest_name ? guest_name.trim() : null, guest_name ? (guest_phone || '').trim() : null,
+        pickup_point || '', notes || '']);
     res.json({ id: result.id });
   } catch (e) {
     if (e.code === '23505') {
@@ -356,6 +363,28 @@ router.post('/:id/passengers', async (req, res) => {
 router.delete('/:id/passengers/:passengerId', async (req, res) => {
   await db.run('DELETE FROM transport_trip_passengers WHERE id=$1 AND trip_id=$2', [req.params.passengerId, req.params.id]);
   res.json({ ok: true });
+});
+
+// Manual boarded/not-boarded toggle — the only way a guest passenger (no
+// badge_token, so never scannable) ever gets marked boarded, and also a
+// straightforward correction for a delegate/host member whose badge won't
+// scan. Idempotent either direction: setting boarded on an already-boarded
+// row, or clearing it on an already-clear one, is a harmless no-op.
+router.put('/:id/passengers/:passengerId/board', async (req, res) => {
+  try {
+    const boarded = req.body.boarded !== false;
+    const result = await db.run(
+      `UPDATE transport_trip_passengers
+       SET boarded_at = CASE WHEN $1 THEN NOW() ELSE NULL END,
+           boarded_by_user_id = CASE WHEN $1 THEN $2 ELSE NULL END
+       WHERE id=$3 AND trip_id=$4 RETURNING boarded_at`,
+      [boarded, req.user.id, req.params.passengerId, req.params.id]
+    );
+    if (!result.rows.length) return res.status(404).json({ error: 'Passenger not found on this trip.' });
+    res.json({ ok: true, boarded_at: result.rows[0].boarded_at });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 
 module.exports = router;

@@ -130,4 +130,31 @@ router.put('/trips/:id/status', requireTransporterRole, async (req, res) => {
   }
 });
 
+// Simple acknowledgement flag — "I've seen this trip and I'm accepting it" —
+// separate from the operational status above. Doesn't block or change
+// anything else; admin/committee just get to see whether the vendor has
+// actually confirmed each trip, not only whether it's "planned".
+router.put('/trips/:id/approve', requireTransporterRole, async (req, res) => {
+  try {
+    const trip = await db.get(`
+      SELECT t.id FROM transport_trips t
+      ${TRIP_SCOPE_JOIN}
+      WHERE t.id = $2 AND ${TRIP_SCOPE_WHERE}
+    `, [req.partnerId, req.params.id]);
+    if (!trip) return res.status(404).json({ error: 'Trip not found.' });
+    const approved = req.body.approved !== false;
+    await db.run(
+      `UPDATE transport_trips SET
+         transporter_approved_at = CASE WHEN $1 THEN NOW() ELSE NULL END,
+         transporter_approved_by_user_id = CASE WHEN $1 THEN $2 ELSE NULL END,
+         updated_at = NOW()
+       WHERE id = $3`,
+      [approved, req.user.id, req.params.id]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
 module.exports = router;
