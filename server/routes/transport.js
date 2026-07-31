@@ -247,6 +247,98 @@ router.post('/group-trip', async (req, res) => {
   }
 });
 
+// --- Boarded Report: one row per passenger, across every trip ------------
+// (not per-trip like GET /:id's manifest) — feeds the admin "Boarded Report"
+// tab next to Transport Planning, a live cross-fleet view of who has and
+// hasn't boarded. Registered before /:id so this literal path is never
+// swallowed as a trip id (same reasoning as vehicles-lite/etc. above).
+// ?trip_date=YYYY-MM-DD filters to one day (defaults to none = every trip,
+// letting the admin pull up a past day too); ?boarded=1/0 filters by
+// whether boarded_at is set.
+router.get('/boarded-report', async (req, res) => {
+  try {
+    const clauses = ['t.pre_tour_id IS NULL'];
+    const params = [];
+    if (req.query.trip_date) { params.push(req.query.trip_date); clauses.push(`t.trip_date = $${params.length}`); }
+    if (req.query.boarded === '1') clauses.push('tp.boarded_at IS NOT NULL');
+    if (req.query.boarded === '0') clauses.push('tp.boarded_at IS NULL');
+    const rows = await db.all(`
+      SELECT tp.id AS passenger_id, tp.boarded_at,
+        COALESCE(p.name, hm.name, tp.guest_name) AS name,
+        COALESCE(p.phone, hm.phone, tp.guest_phone) AS phone,
+        CASE WHEN tp.participant_id IS NOT NULL THEN 'participant'
+             WHEN tp.host_member_id IS NOT NULL THEN 'host_member'
+             ELSE 'guest' END AS entity_type,
+        t.id AS trip_id, t.trip_date, t.depart_time, t.from_location, t.to_location, t.status AS trip_status,
+        v.vehicle_code, v.vehicle_type, d.name AS driver_name, d.phone AS driver_phone,
+        u.username AS boarded_by_username
+      FROM transport_trip_passengers tp
+      JOIN transport_trips t ON t.id = tp.trip_id
+      LEFT JOIN participants p ON p.id = tp.participant_id
+      LEFT JOIN host_members hm ON hm.id = tp.host_member_id
+      LEFT JOIN vehicles v ON v.id = t.vehicle_id
+      LEFT JOIN drivers d ON d.id = t.driver_id
+      LEFT JOIN users u ON u.id = tp.boarded_by_user_id
+      WHERE ${clauses.join(' AND ')}
+      ORDER BY t.trip_date DESC NULLS LAST, t.depart_time, tp.boarded_at DESC NULLS LAST
+    `, params);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// --- Transport Report: full trip history, one row per TRIP (not per
+// passenger like /boarded-report above) — each trip carries its own nested
+// passengers[] array. Feeds the admin "Transport Report" tab: a clean,
+// downloadable record of completed (or any-status) trips with vehicle,
+// driver, transporter, route, timing, and who actually travelled.
+// Registered before /:id for the same reason as every other literal path here.
+router.get('/report/full', async (req, res) => {
+  try {
+    const clauses = ['t.pre_tour_id IS NULL'];
+    const params = [];
+    if (req.query.status) { params.push(req.query.status); clauses.push(`t.status = $${params.length}`); }
+    if (req.query.date_from) { params.push(req.query.date_from); clauses.push(`t.trip_date >= $${params.length}`); }
+    if (req.query.date_to) { params.push(req.query.date_to); clauses.push(`t.trip_date <= $${params.length}`); }
+    const trips = await db.all(`
+      SELECT t.id, t.trip_date, t.depart_time, t.from_location, t.to_location, t.purpose, t.status,
+        t.transporter_approved_at,
+        v.vehicle_code, v.vehicle_type, v.model AS vehicle_model,
+        d.name AS driver_name, d.phone AS driver_phone,
+        COALESCE(pv.name, pd.name) AS transporter_name
+      FROM transport_trips t
+      LEFT JOIN vehicles v ON v.id = t.vehicle_id
+      LEFT JOIN drivers d ON d.id = t.driver_id
+      LEFT JOIN partners pv ON pv.id = v.partner_id
+      LEFT JOIN partners pd ON pd.id = d.partner_id
+      WHERE ${clauses.join(' AND ')}
+      ORDER BY t.trip_date DESC NULLS LAST, t.depart_time
+    `, params);
+    if (!trips.length) return res.json([]);
+    const tripIds = trips.map((t) => t.id);
+    const passengers = await db.all(`
+      SELECT tp.trip_id, tp.boarded_at,
+        COALESCE(p.name, hm.name, tp.guest_name) AS name,
+        COALESCE(p.phone, hm.phone, tp.guest_phone) AS phone,
+        CASE WHEN tp.participant_id IS NOT NULL THEN 'participant'
+             WHEN tp.host_member_id IS NOT NULL THEN 'host_member'
+             ELSE 'guest' END AS entity_type
+      FROM transport_trip_passengers tp
+      LEFT JOIN participants p ON p.id = tp.participant_id
+      LEFT JOIN host_members hm ON hm.id = tp.host_member_id
+      WHERE tp.trip_id = ANY($1)
+      ORDER BY tp.boarded_at NULLS LAST, tp.id
+    `, [tripIds]);
+    const byTrip = {};
+    for (const p of passengers) (byTrip[p.trip_id] = byTrip[p.trip_id] || []).push(p);
+    for (const t of trips) t.passengers = byTrip[t.id] || [];
+    res.json(trips);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.get('/:id', async (req, res) => {
   try {
     const trip = await db.get(`

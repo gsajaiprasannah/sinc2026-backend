@@ -159,7 +159,9 @@ router.get('/', async (req, res) => {
           LEFT JOIN registrations r ON r.id = p.registration_id
           LEFT JOIN clubs c ON c.id = p.club_id
           ${SPOC_JOIN}
-          WHERE p.name ILIKE $1 OR p.phone ILIKE $1 OR r.reg_number ILIKE $1 OR c.name ILIKE $1
+          WHERE p.name ILIKE $1 OR p.phone ILIKE $1 OR p.whatsapp ILIKE $1 OR p.email ILIKE $1
+            OR p.designation ILIKE $1 OR p.spoc_name ILIKE $1 OR p.notes ILIKE $1
+            OR p.participant_code ILIKE $1 OR r.reg_number ILIKE $1 OR c.name ILIKE $1
           ORDER BY p.created_at DESC
         `, [search])
       : await db.all(`

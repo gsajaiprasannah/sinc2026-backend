@@ -353,6 +353,73 @@ async function processSend(campaignId) {
   );
 }
 
+// Re-sends only to recipients whose last attempt failed (a typo'd address
+// that's since been fixed, a transient Resend hiccup, etc.) rather than
+// blasting everyone in the campaign again. Re-fetches each failed person's
+// full row (by their original recipient_id) so merge tokens still resolve
+// correctly, falling back to the name/email captured at the original send
+// if the source record has since been deleted.
+async function processResend(campaign, failedRows) {
+  const failedIds = new Set(failedRows.map((r) => r.recipient_id));
+  const audienceRows = await fetchAudienceRows(campaign.audience_type, {
+    recipientIds: failedRows.map((r) => r.recipient_id),
+    manualRecipients: campaign.manual_recipients
+  });
+  const byId = new Map(audienceRows.filter((r) => failedIds.has(r.id)).map((r) => [r.id, r]));
+
+  await runInBatches(failedRows, async (fr) => {
+    const row = byId.get(fr.recipient_id) || { id: fr.recipient_id, name: fr.name, email: fr.email };
+    const result = await sendEmail({
+      to: row.email || fr.email,
+      subject: personalize(campaign.subject, row),
+      html: personalize(campaign.body_html, row),
+      fromName: campaign.from_name
+    });
+    await db.run(
+      `UPDATE email_campaign_recipients SET status=$1, resend_id=$2, error=$3, sent_at=CASE WHEN $1='sent' THEN NOW() ELSE sent_at END
+       WHERE id=$4`,
+      [result.ok ? 'sent' : 'failed', result.id || null, result.error || null, fr.id]
+    );
+  });
+
+  // Recompute the campaign's overall status from ALL its recipients (not just
+  // this resend batch), since some may have succeeded on the original send.
+  const counts = await db.get(
+    `SELECT COUNT(*) FILTER (WHERE status = 'sent')::int AS sent FROM email_campaign_recipients WHERE campaign_id=$1`,
+    [campaign.id]
+  );
+  await db.run(`UPDATE email_campaigns SET status=$1, sent_at=NOW() WHERE id=$2`, [counts.sent > 0 ? 'sent' : 'failed', campaign.id]);
+}
+
+router.post('/:id/resend-failed', async (req, res) => {
+  if (!isConfigured()) return res.status(400).json({ error: 'RESEND_API_KEY is not set on the server yet — add it in Render\'s Environment tab, then try again.' });
+  try {
+    const campaign = await db.get('SELECT * FROM email_campaigns WHERE id=$1', [req.params.id]);
+    if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+    if (campaign.status === 'sending') return res.status(409).json({ error: 'This campaign is already sending.' });
+
+    const failed = await db.all(
+      `SELECT * FROM email_campaign_recipients WHERE campaign_id=$1 AND status='failed'`,
+      [req.params.id]
+    );
+    if (!failed.length) return res.status(400).json({ error: 'No failed recipients to resend.' });
+
+    await db.run(`UPDATE email_campaigns SET status='sending' WHERE id=$1`, [req.params.id]);
+    logActivity(req.user, {
+      action: 'resend', entityType: 'email_campaign', entityId: campaign.id, label: campaign.name,
+      details: `${failed.length} previously-failed recipient(s)`
+    });
+
+    // Fire-and-forget, same as /:id/send — errors per-recipient are already
+    // captured; anything that escapes that is logged, not thrown.
+    processResend(campaign, failed).catch((e) => console.error(`Email campaign #${campaign.id} resend failed:`, e.message));
+
+    res.json({ ok: true, status: 'sending', recipient_count: failed.length });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
 // Kicks off the send in the background and returns immediately — see file
 // header for why this isn't awaited end-to-end by the request.
 router.post('/:id/send', async (req, res) => {
