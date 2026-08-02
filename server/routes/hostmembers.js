@@ -157,6 +157,22 @@ router.put('/:id', async (req, res) => {
     if (sex !== undefined) {
       await db.run('UPDATE host_members SET sex=$1 WHERE id=$2', [normalizeSex(sex), req.params.id]);
     }
+    // Spouse dinner attendance + goodies offer. Members normally answer these
+    // themselves on my-profile.html, but the office also needs to key them in
+    // for anyone who phones the answer through. Written one at a time and only
+    // when actually sent, so an admin editing just the payment status can't
+    // silently reset a spouse's dinner bookings to "not attending".
+    const SPOUSE_BOOLS = ['spouse_dinner_aug12', 'spouse_dinner_aug13', 'spouse_dinner_aug14', 'goodies_offer'];
+    for (const col of SPOUSE_BOOLS) {
+      if (req.body[col] === undefined) continue;
+      const v = req.body[col];
+      const on = v === true || v === 'true' || v === 'on' || v === 1 || v === '1';
+      await db.run(`UPDATE host_members SET ${col}=$1 WHERE id=$2`, [on, req.params.id]);
+    }
+    for (const col of ['spouse_name', 'goodies_details']) {
+      if (req.body[col] === undefined) continue;
+      await db.run(`UPDATE host_members SET ${col}=$1 WHERE id=$2`, [req.body[col] || null, req.params.id]);
+    }
     logActivity(req.user, { action: 'update', entityType: 'host_member', entityId: Number(req.params.id), label: name });
     res.json({ ok: true });
   } catch (e) {

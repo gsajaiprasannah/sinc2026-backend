@@ -1099,6 +1099,30 @@ async function initSchema() {
   // migration; the admin UI dropdown is the source of truth for the standard list.
   await pool.query(`ALTER TABLE host_members ADD COLUMN IF NOT EXISTS leadership_role TEXT;`);
 
+  // --- Spouse dinner attendance + goodies offer (host members only) ---
+  // The congress dinners on 12, 13 and 14 August are open to a host member's
+  // spouse; children are not admitted at all. Each night is a separate
+  // boolean rather than one "brings spouse" flag because catering needs a
+  // headcount per night — a spouse joining only the gala on the 13th must not
+  // inflate the count for the other two.
+  //
+  // The dates are columns rather than rows in a join table on purpose: there
+  // are exactly three, fixed by the programme, and flat columns keep them in
+  // the existing host-member SELECT, the field-picker export and the admin
+  // table without a join. If a fourth dinner is ever added this should become
+  // host_member_dinners(host_member_id, dinner_date) instead of a fourth column.
+  await pool.query(`ALTER TABLE host_members ADD COLUMN IF NOT EXISTS spouse_name TEXT;`);
+  await pool.query(`ALTER TABLE host_members ADD COLUMN IF NOT EXISTS spouse_dinner_aug12 BOOLEAN NOT NULL DEFAULT FALSE;`);
+  await pool.query(`ALTER TABLE host_members ADD COLUMN IF NOT EXISTS spouse_dinner_aug13 BOOLEAN NOT NULL DEFAULT FALSE;`);
+  await pool.query(`ALTER TABLE host_members ADD COLUMN IF NOT EXISTS spouse_dinner_aug14 BOOLEAN NOT NULL DEFAULT FALSE;`);
+  // "Would you like to give away goodies to all participants?" — a yes/no plus
+  // free text. Deliberately not tied to the Goodies & Inventory module yet:
+  // at this stage we're gauging willingness, and forcing a firm item/quantity
+  // up front would depress the response rate. The office follows up with
+  // whoever says yes and enters the actual stock through Inventory.
+  await pool.query(`ALTER TABLE host_members ADD COLUMN IF NOT EXISTS goodies_offer BOOLEAN NOT NULL DEFAULT FALSE;`);
+  await pool.query(`ALTER TABLE host_members ADD COLUMN IF NOT EXISTS goodies_details TEXT;`);
+
   // --- Stalls module: exhibition stall enquiry -> billing -> allocation ---
   // Separate from Sponsors (a stall is a paid physical spot, not a
   // sponsorship tier). The hall count/layout isn't finalized yet, so halls

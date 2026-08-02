@@ -53,9 +53,16 @@ async function findMatches(name, phone) {
          (SELECT ptp.pre_tour_id FROM pre_tour_participants ptp WHERE ptp.participant_id = ${table}.id ORDER BY ptp.id LIMIT 1) AS pre_tour_id`
       // host_members/volunteers answer the same catering questions plus the
       // accommodation one, on my-profile.html — returned here so that form
-      // can prefill what they've already told us.
+      // can prefill what they've already told us. The spouse-dinner and
+      // goodies columns exist ONLY on host_members (see the db.js migration),
+      // so they're appended for that type alone — asking for them against
+      // `volunteers` would fail the whole lookup with "column does not exist".
       : `, dietary_preference, drink_preference, special_requests,
-         hotel_stay_required, hotel_stay_notes, logo_url`;
+         hotel_stay_required, hotel_stay_notes, logo_url` +
+        (type === 'host_member'
+          ? `, spouse_name, spouse_dinner_aug12, spouse_dinner_aug13, spouse_dinner_aug14,
+             goodies_offer, goodies_details`
+          : '');
     const rows = await db.all(`
       SELECT id, name, email, shirt_size, tshirt_size, waist_size, photo_url, business_card_url${extraCols}
       FROM ${table}
@@ -122,6 +129,26 @@ const PROFILE_EXTRA_FIELDS = {
   hotel_stay_required: (v) => (v === true || v === 'true' || v === 'on' || v === 1 || v === '1'),
 };
 
+// Columns that exist ONLY on host_members. Kept separate from the shared set
+// above because the same PUT serves delegates and volunteers too, and naming a
+// column their table doesn't have would fail the UPDATE outright.
+const HOST_MEMBER_ONLY_FIELDS = {
+  // Spouse dinner attendance. One flag per night because catering counts are
+  // per-night — see the migration note in db.js.
+  spouse_name: (v) => cleanText(v),
+  spouse_dinner_aug12: (v) => toBool(v),
+  spouse_dinner_aug13: (v) => toBool(v),
+  spouse_dinner_aug14: (v) => toBool(v),
+  goodies_offer: (v) => toBool(v),
+  goodies_details: (v) => cleanText(v),
+};
+
+// Checkboxes reach us as `true`, `"true"`, `"on"`, `1` or `"1"` depending on
+// whether the page posts JSON or a form encoding; anything else is false.
+function toBool(v) {
+  return v === true || v === 'true' || v === 'on' || v === 1 || v === '1';
+}
+
 router.put('/:type/:id', async (req, res) => {
   const { name, phone, email, shirt_size, tshirt_size, waist_size } = req.body;
   try {
@@ -134,7 +161,10 @@ router.put('/:type/:id', async (req, res) => {
     // them; my-travel.html (Delegates) doesn't, and a delegate who also opens
     // my-profile.html must not have the food/drink answers they gave on the
     // travel page silently blanked by a form that never showed those inputs.
-    for (const [col, clean] of Object.entries(PROFILE_EXTRA_FIELDS)) {
+    const allowed = verified.table === 'host_members'
+      ? { ...PROFILE_EXTRA_FIELDS, ...HOST_MEMBER_ONLY_FIELDS }
+      : PROFILE_EXTRA_FIELDS;
+    for (const [col, clean] of Object.entries(allowed)) {
       if (req.body[col] === undefined) continue;
       params.push(clean(req.body[col]));
       sets.push(`${col}=$${params.length}`);
