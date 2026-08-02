@@ -7,6 +7,7 @@ const { saveFile, deleteStoredFile, readStoredFile, storedFileExt } = require('.
 const { logActivity } = require('../lib/activityLogger');
 const { createZip, zipSafeName } = require('../lib/zip');
 const { occupancyOf, REG_TYPE_LABEL: REG_TYPE_LABELS } = require('../lib/regType');
+const { normalizeSex } = require('../lib/sex');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -17,7 +18,7 @@ const upload = multer({ storage: multer.memoryStorage() });
 const uploadImage = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 const FIELDS = [
-  'registration_id', 'is_primary', 'name', 'phone', 'whatsapp', 'email', 'address', 'club_id', 'designation',
+  'registration_id', 'is_primary', 'name', 'phone', 'whatsapp', 'email', 'address', 'club_id', 'designation', 'sex',
   'dietary_preference', 'drink_preference', 'special_requests', 'business_profile',
   'travel_mode', 'travel_number', 'travel_datetime', 'arrival_point',
   'departure_mode', 'departure_number', 'departure_datetime', 'departure_point',
@@ -238,7 +239,9 @@ router.post('/', async (req, res) => {
     }
     const cols = FIELDS.filter((f) => body[f] !== undefined);
     const placeholders = cols.map((_, i) => `$${i + 1}`).join(',');
-    const values = cols.map((c) => body[c]);
+    // sex goes through normalizeSex so "Male"/"female"/"" all land on the
+    // canonical 'M'/'F'/NULL the CHECK constraint allows, whatever the client sent.
+    const values = cols.map((c) => (c === 'sex' ? normalizeSex(body[c]) : body[c]));
     const result = await db.run(
       `INSERT INTO participants (${cols.join(',')}) VALUES (${placeholders}) RETURNING id, participant_code`,
       values
@@ -296,7 +299,9 @@ router.put('/:id', async (req, res) => {
     const cols = FIELDS.filter((f) => body[f] !== undefined);
     if (cols.length === 0) return res.json({ ok: true });
     const setClause = cols.map((c, i) => `${c}=$${i + 1}`).join(',');
-    const values = cols.map((c) => body[c]);
+    // sex goes through normalizeSex so "Male"/"female"/"" all land on the
+    // canonical 'M'/'F'/NULL the CHECK constraint allows, whatever the client sent.
+    const values = cols.map((c) => (c === 'sex' ? normalizeSex(body[c]) : body[c]));
     await db.run(`UPDATE participants SET ${setClause} WHERE id=$${cols.length + 1}`, [...values, req.params.id]);
     logActivity(req.user, { action: 'update', entityType: 'participant', entityId: Number(req.params.id), label: body.name });
     res.json({ ok: true });
@@ -577,8 +582,8 @@ router.post('/bulk-upload', upload.single('file'), async (req, res) => {
              drink_preference, special_requests, business_profile,
              travel_mode, travel_number, travel_datetime, arrival_point,
              departure_mode, departure_number, departure_datetime, departure_point,
-             pickup_by, pickup_vehicle, pickup_phone, spoc_name, spoc_phone, notes)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)
+             pickup_by, pickup_vehicle, pickup_phone, spoc_name, spoc_phone, notes, sex)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)
         `, [
           reg ? reg.id : null,
           r.is_primary !== undefined ? Number(r.is_primary) : 1,
@@ -606,7 +611,8 @@ router.post('/bulk-upload', upload.single('file'), async (req, res) => {
           r.pickup_phone || '',
           r.spoc_name || '',
           r.spoc_phone || '',
-          r.notes || ''
+          r.notes || '',
+          normalizeSex(r.sex || r.gender)
         ]);
         imported++;
       }

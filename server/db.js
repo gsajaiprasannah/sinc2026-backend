@@ -819,6 +819,40 @@ async function initSchema() {
   await pool.query(`ALTER TABLE host_members ADD COLUMN IF NOT EXISTS waist_size TEXT;`);
   await pool.query(`ALTER TABLE host_members ADD COLUMN IF NOT EXISTS photo_url TEXT;`);
   await pool.query(`ALTER TABLE host_members ADD COLUMN IF NOT EXISTS business_card_url TEXT;`);
+
+  // --- Sex (M/F) for Delegates and Host Members ---------------------------
+  // Needed for rooming (twin-sharing allocation is gender-segregated) and for
+  // headcount reporting. Deliberately NULLable: "we don't know yet" is a real
+  // and common state, and is very different from a guess. The admin UI shows
+  // NULL as "Not set" and offers a filter for exactly those rows, so the
+  // office can work through them deliberately.
+  await pool.query(`ALTER TABLE participants ADD COLUMN IF NOT EXISTS sex TEXT;`);
+  await pool.query(`ALTER TABLE host_members ADD COLUMN IF NOT EXISTS sex TEXT;`);
+  // Constraint added separately from the column so re-running against a table
+  // that already has the column (but not the constraint) still gets it.
+  for (const tbl of ['participants', 'host_members']) {
+    await pool.query(`
+      DO $$ BEGIN
+        ALTER TABLE ${tbl} ADD CONSTRAINT ${tbl}_sex_chk CHECK (sex IN ('M','F') OR sex IS NULL);
+      EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+    `);
+  }
+  // One-time backfill from the honorific already carried in the name, e.g.
+  // "Mrs Aruna Anand" -> F. Only unambiguous titles are used: "Dr", "Sk" and
+  // bare names are left NULL rather than guessed, because a wrong value here
+  // would silently propagate into rooming lists and badge counts. Guarded by
+  // "sex IS NULL" so it never overwrites a value an admin has since set by
+  // hand, and so re-running the migration on restart is a no-op.
+  for (const tbl of ['participants', 'host_members']) {
+    await pool.query(`
+      UPDATE ${tbl} SET sex = 'M'
+      WHERE sex IS NULL AND name ~* '^\\s*(mr|shri|sri)\\.?\\s+'
+    `);
+    await pool.query(`
+      UPDATE ${tbl} SET sex = 'F'
+      WHERE sex IS NULL AND name ~* '^\\s*(mrs|ms|miss|smt)\\.?\\s+'
+    `);
+  }
   await pool.query(`ALTER TABLE volunteers ADD COLUMN IF NOT EXISTS shirt_size TEXT;`);
   await pool.query(`ALTER TABLE volunteers ADD COLUMN IF NOT EXISTS tshirt_size TEXT;`);
   await pool.query(`ALTER TABLE volunteers ADD COLUMN IF NOT EXISTS waist_size TEXT;`);

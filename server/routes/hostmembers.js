@@ -6,6 +6,7 @@ const { attachChecklistRoutes, deleteChecklistForOwner } = require('./checklistH
 const { saveFile, deleteStoredFile, readStoredFile, storedFileExt } = require('../uploadHelper');
 const { logActivity } = require('../lib/activityLogger');
 const { createZip, zipSafeName } = require('../lib/zip');
+const { normalizeSex, sexFromName } = require('../lib/sex');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -78,7 +79,7 @@ router.get('/:id', async (req, res) => {
 });
 
 router.post('/', async (req, res) => {
-  const { name, email, phone, company, designation, category, payment_status, payment_amount, payment_date, payment_mode, notes, leadership_role, shirt_size, tshirt_size, waist_size, force } = req.body;
+  const { name, email, phone, company, designation, category, payment_status, payment_amount, payment_date, payment_mode, notes, leadership_role, shirt_size, tshirt_size, waist_size, sex, force } = req.body;
   if (!name) return res.status(400).json({ error: 'name is required' });
   try {
     if (!force) {
@@ -92,11 +93,14 @@ router.post('/', async (req, res) => {
       }
     }
     const result = await db.run(`
-      INSERT INTO host_members (name, email, phone, company, designation, category, payment_status, payment_amount, payment_date, payment_mode, notes, leadership_role, shirt_size, tshirt_size, waist_size)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id
+      INSERT INTO host_members (name, email, phone, company, designation, category, payment_status, payment_amount, payment_date, payment_mode, notes, leadership_role, shirt_size, tshirt_size, waist_size, sex)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id
     `, [name, email || '', phone || '', company || '', designation || '', category || '',
         payment_status || 'pending', Number(payment_amount) || 5000, payment_date || null, payment_mode || '', notes || '', leadership_role || null,
-        shirt_size || null, tshirt_size || null, waist_size || null]);
+        shirt_size || null, tshirt_size || null, waist_size || null,
+        // Fall back to the honorific in the name ("Mrs Aruna Anand") when the
+        // form left sex blank, matching the one-time backfill in db.js.
+        normalizeSex(sex) || sexFromName(name)]);
     logActivity(req.user, { action: 'create', entityType: 'host_member', entityId: result.id, label: name });
     res.json({ id: result.id });
   } catch (e) {
@@ -105,7 +109,7 @@ router.post('/', async (req, res) => {
 });
 
 router.put('/:id', async (req, res) => {
-  const { name, email, phone, company, designation, category, payment_status, payment_amount, payment_date, payment_mode, notes, leadership_role, shirt_size, tshirt_size, waist_size, force } = req.body;
+  const { name, email, phone, company, designation, category, payment_status, payment_amount, payment_date, payment_mode, notes, leadership_role, shirt_size, tshirt_size, waist_size, sex, force } = req.body;
   try {
     if (!force && (name !== undefined || phone !== undefined)) {
       const current = await db.get('SELECT name, phone FROM host_members WHERE id=$1', [req.params.id]);
@@ -147,6 +151,11 @@ router.put('/:id', async (req, res) => {
     }
     if (waist_size !== undefined) {
       await db.run('UPDATE host_members SET waist_size=$1 WHERE id=$2', [waist_size || null, req.params.id]);
+    }
+    // Same separate-statement treatment as the sizes above, so choosing the
+    // blank "— Not set —" option actually clears sex back to NULL.
+    if (sex !== undefined) {
+      await db.run('UPDATE host_members SET sex=$1 WHERE id=$2', [normalizeSex(sex), req.params.id]);
     }
     logActivity(req.user, { action: 'update', entityType: 'host_member', entityId: Number(req.params.id), label: name });
     res.json({ ok: true });
@@ -266,15 +275,17 @@ router.post('/bulk-upload', upload.single('file'), async (req, res) => {
           await tx.run(`
             UPDATE host_members SET name=$1, email=COALESCE(NULLIF($2,''),email), phone=COALESCE(NULLIF($3,''),phone),
               company=COALESCE(NULLIF($4,''),company), designation=COALESCE(NULLIF($5,''),designation),
-              category=COALESCE(NULLIF($6,''),category)
+              category=COALESCE(NULLIF($6,''),category), sex=COALESCE($8,sex)
             WHERE id=$7
-          `, [name, r.email || '', phone, r.company || '', r.designation || '', r.category || '', dup.id]);
+          `, [name, r.email || '', phone, r.company || '', r.designation || '', r.category || '', dup.id,
+              normalizeSex(r.sex || r.gender)]);
           updated++;
         } else {
           await tx.run(`
-            INSERT INTO host_members (name, email, phone, company, designation, category)
-            VALUES ($1,$2,$3,$4,$5,$6)
-          `, [name, r.email || '', phone, r.company || '', r.designation || '', r.category || '']);
+            INSERT INTO host_members (name, email, phone, company, designation, category, sex)
+            VALUES ($1,$2,$3,$4,$5,$6,$7)
+          `, [name, r.email || '', phone, r.company || '', r.designation || '', r.category || '',
+              normalizeSex(r.sex || r.gender) || sexFromName(name)]);
           inserted++;
         }
       }
