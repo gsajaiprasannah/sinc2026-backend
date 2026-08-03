@@ -18,7 +18,7 @@ const upload = multer({ storage: multer.memoryStorage() });
 const uploadImage = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 const FIELDS = [
-  'registration_id', 'is_primary', 'name', 'phone', 'whatsapp', 'email', 'address', 'club_id', 'designation', 'sex',
+  'registration_id', 'is_primary', 'name', 'phone', 'whatsapp', 'email', 'address', 'club_id', 'designation', 'company', 'sex',
   'dietary_preference', 'drink_preference', 'special_requests', 'business_profile',
   'travel_mode', 'travel_number', 'travel_datetime', 'arrival_point',
   'departure_mode', 'departure_number', 'departure_datetime', 'departure_point',
@@ -161,7 +161,7 @@ router.get('/', async (req, res) => {
           LEFT JOIN clubs c ON c.id = p.club_id
           ${SPOC_JOIN}
           WHERE p.name ILIKE $1 OR p.phone ILIKE $1 OR p.whatsapp ILIKE $1 OR p.email ILIKE $1
-            OR p.designation ILIKE $1 OR p.spoc_name ILIKE $1 OR p.notes ILIKE $1
+            OR p.designation ILIKE $1 OR p.company ILIKE $1 OR p.spoc_name ILIKE $1 OR p.notes ILIKE $1
             OR p.participant_code ILIKE $1 OR r.reg_number ILIKE $1 OR c.name ILIKE $1
           ORDER BY p.created_at DESC
         `, [search])
@@ -582,8 +582,8 @@ router.post('/bulk-upload', upload.single('file'), async (req, res) => {
              drink_preference, special_requests, business_profile,
              travel_mode, travel_number, travel_datetime, arrival_point,
              departure_mode, departure_number, departure_datetime, departure_point,
-             pickup_by, pickup_vehicle, pickup_phone, spoc_name, spoc_phone, notes, sex)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)
+             pickup_by, pickup_vehicle, pickup_phone, spoc_name, spoc_phone, notes, sex, company)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)
         `, [
           reg ? reg.id : null,
           r.is_primary !== undefined ? Number(r.is_primary) : 1,
@@ -612,7 +612,8 @@ router.post('/bulk-upload', upload.single('file'), async (req, res) => {
           r.spoc_name || '',
           r.spoc_phone || '',
           r.notes || '',
-          normalizeSex(r.sex || r.gender)
+          normalizeSex(r.sex || r.gender),
+          r.company || r.company_name || null
         ]);
         imported++;
       }

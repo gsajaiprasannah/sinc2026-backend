@@ -1099,6 +1099,17 @@ async function initSchema() {
   // migration; the admin UI dropdown is the source of truth for the standard list.
   await pool.query(`ALTER TABLE host_members ADD COLUMN IF NOT EXISTS leadership_role TEXT;`);
 
+  // --- Delegate company ---
+  // host_members has had a `company` column since the table was created;
+  // participants never did, because the original registration-form import
+  // dumped everything it couldn't map into one `notes` string of the form
+  // "Company: X | Job Title: Y | City: Z | Country: IN | ...". That left the
+  // company unsortable, unfilterable and unavailable to the badge and the
+  // delegate directory. server/scripts/backfill-delegate-company.js lifts it
+  // out of notes into this column; `notes` is deliberately left untouched so
+  // the original import record survives and the backfill stays re-runnable.
+  await pool.query(`ALTER TABLE participants ADD COLUMN IF NOT EXISTS company TEXT;`);
+
   // --- Spouse dinner attendance + goodies offer (host members only) ---
   // The congress dinners on 12, 13 and 14 August are open to a host member's
   // spouse; children are not admitted at all. Each night is a separate

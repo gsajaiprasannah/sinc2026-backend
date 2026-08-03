@@ -42,7 +42,7 @@ const TARGETS = {
     label: 'Delegate',
     keyFields: ['reg_number', 'is_primary'],
     editable: [
-      'name', 'phone', 'whatsapp', 'email', 'address', 'designation', 'sex',
+      'name', 'phone', 'whatsapp', 'email', 'address', 'designation', 'company', 'sex',
       'dietary_preference', 'drink_preference', 'special_requests', 'business_profile',
       'travel_mode', 'travel_number', 'travel_datetime', 'arrival_point',
       'departure_mode', 'departure_number', 'departure_datetime', 'departure_point',
