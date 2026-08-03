@@ -46,7 +46,7 @@ async function findMatches(name, phone) {
     // page (Delegate-only) needs them to prefill its form; host_members/
     // volunteers don't have these columns so they're left out for those tables.
     const extraCols = type === 'participant'
-      ? `, address, travel_mode, travel_number, travel_datetime, arrival_point,
+      ? `, address, company, travel_mode, travel_number, travel_datetime, arrival_point,
          departure_mode, departure_number, departure_datetime, departure_point,
          dietary_preference, drink_preference, special_requests, business_profile,
          aadhaar_number, aadhaar_url, passport_number, passport_url,
@@ -267,8 +267,13 @@ router.put('/participant/:id/travel', async (req, res) => {
         departure_mode=$7, departure_number=$8, departure_datetime=$9, departure_point=$10,
         shirt_size=$11, tshirt_size=$12, waist_size=$13,
         dietary_preference=$14, drink_preference=$15, special_requests=$16, business_profile=$17,
-        aadhaar_number=$18, passport_number=$19
-      WHERE id=$20
+        aadhaar_number=$18, passport_number=$19,
+        -- Only overwrite company when the form actually sent one. 62 delegates
+        -- left it blank on the original registration form and the office may
+        -- have keyed it in since; a delegate who saves travel details without
+        -- touching the field must not wipe that.
+        company=COALESCE($20, company)
+      WHERE id=$21
     `, [
       cleanText(b.email),
       cleanText(b.address), cleanMode(b.travel_mode), cleanText(b.travel_number), cleanText(b.travel_datetime), cleanText(b.arrival_point),
@@ -276,6 +281,9 @@ router.put('/participant/:id/travel', async (req, res) => {
       cleanText(b.shirt_size), cleanText(b.tshirt_size), cleanText(b.waist_size),
       cleanText(b.dietary_preference), cleanText(b.drink_preference), cleanText(b.special_requests), cleanText(b.business_profile),
       aadhaar.value, passport.value,
+      // cleanText returns null for an empty string, which COALESCE then
+      // treats as "leave it alone" — exactly the behaviour we want.
+      cleanText(b.company),
       req.params.id
     ]);
     await Promise.all([ensurePoint(b.arrival_point), ensurePoint(b.departure_point)]);
