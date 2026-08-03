@@ -62,6 +62,8 @@ app.use('/api/email-campaigns', requireAdminRole, require('./routes/emailCampaig
 // further down — that gate would otherwise block this route's POST/PUT
 // calls with "Login required.", defeating the whole point of a no-login page.
 app.use('/api/public-profile', require('./routes/publicProfile'));
+// Public tour-interest page (tours.html) — no login, mobile-number lookup.
+app.use('/api/public-tours', require('./routes/publicTours'));
 
 // Public, no-login QR badge lookup — the "anyone scans it, gets a digital
 // visiting card" half of the badge feature (see server/routes/badge.js file

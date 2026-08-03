@@ -10,7 +10,9 @@ const router = express.Router();
 // dashboard still want.
 router.get('/', async (req, res) => {
   try {
-    const type = req.query.type === 'post' ? 'post' : (req.query.type === 'pre' ? 'pre' : null);
+    // 'day' joins pre/post — see the tour_type note in db.js. An unrecognised
+    // value falls through to null, which lists every type.
+    const type = ['pre', 'post', 'day'].includes(req.query.type) ? req.query.type : null;
     const rows = await db.all(`
       SELECT pt.*,
         (SELECT COUNT(*) FROM pre_tour_participants pp WHERE pp.pre_tour_id = pt.id) AS participant_count,
@@ -128,7 +130,7 @@ router.post('/', async (req, res) => {
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id
     `, [name, start_date || null, end_date || null, hotel || '', attractions || '', description || '',
         capacity ? Number(capacity) : null, price ? Number(price) : null, status || 'planned', notes || '',
-        tour_type === 'post' ? 'post' : 'pre']);
+        ['pre', 'post', 'day'].includes(tour_type) ? tour_type : 'pre']);
     logActivity(req.user, { action: 'create', entityType: 'pre_tour', entityId: result.id, label: name });
     res.json({ id: result.id });
   } catch (e) {
@@ -150,7 +152,9 @@ router.put('/:id', async (req, res) => {
         attractions !== undefined ? attractions : null, description !== undefined ? description : null,
         capacity !== undefined ? Number(capacity) : null, price !== undefined ? Number(price) : null,
         status || null, notes !== undefined ? notes : null, req.params.id,
-        tour_type === 'post' ? 'post' : (tour_type === 'pre' ? 'pre' : null)]);
+        // null leaves the existing type alone (COALESCE above) — an edit form
+        // that doesn't send tour_type must not silently reclassify the tour.
+        ['pre', 'post', 'day'].includes(tour_type) ? tour_type : null]);
     logActivity(req.user, { action: 'update', entityType: 'pre_tour', entityId: Number(req.params.id), label: name });
     res.json({ ok: true });
   } catch (e) {

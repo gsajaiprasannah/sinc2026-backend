@@ -1731,7 +1731,30 @@ async function initSchema() {
   // Defaults to 'pre' so every existing tour stays exactly what it was.
   await pool.query(`ALTER TABLE pre_tours ADD COLUMN IF NOT EXISTS tour_type TEXT NOT NULL DEFAULT 'pre';`);
   await pool.query(`ALTER TABLE pre_tours DROP CONSTRAINT IF EXISTS pre_tours_tour_type_check;`);
-  await pool.query(`ALTER TABLE pre_tours ADD CONSTRAINT pre_tours_tour_type_check CHECK (tour_type IN ('pre','post'));`);
+  // 'day' joins them for the 12 August single-day visits (temples, hill
+  // stations, museums, factory tours, member properties). Same reasoning as
+  // 'post': a day tour has dates, an itinerary, signups and a coach, so it is
+  // a third type rather than a fourth set of tables.
+  await pool.query(`ALTER TABLE pre_tours ADD CONSTRAINT pre_tours_tour_type_check CHECK (tour_type IN ('pre','post','day'));`);
+
+  // --- Public tour-interest page (tours.html) ------------------------------
+  // `category` groups day tours on the public page the way the printed
+  // programme does ("Temple & Spiritual", "Nature & Hill Experiences", ...).
+  // Free text, not an enum, because the categories are a presentation choice
+  // the office should be able to rename without a migration.
+  await pool.query(`ALTER TABLE pre_tours ADD COLUMN IF NOT EXISTS category TEXT;`);
+  // The "TOUR INCLUDES" bullet list from the programme, one item per line.
+  await pool.query(`ALTER TABLE pre_tours ADD COLUMN IF NOT EXISTS inclusions TEXT;`);
+  // Opt-in, not opt-out: a tour only appears on the public page once someone
+  // has deliberately published it. A half-drafted tour must never be
+  // bookable just because it exists.
+  await pool.query(`ALTER TABLE pre_tours ADD COLUMN IF NOT EXISTS public_visible BOOLEAN NOT NULL DEFAULT FALSE;`);
+
+  // Signups made from the public page are expressions of interest, not
+  // confirmed seats — the office still has to allocate coaches and, for
+  // pre-tours, collect payment. `source` distinguishes them from a row the
+  // office added by hand, so the follow-up list is a simple filter.
+  await pool.query(`ALTER TABLE pre_tour_participants ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'admin';`);
   // Itinerary items gain a free-text duration/notes field so a day can carry
   // real detail ("2 hrs, includes guided walk") beyond a single time stamp.
   await pool.query(`ALTER TABLE pre_tour_itinerary ADD COLUMN IF NOT EXISTS duration TEXT;`);
