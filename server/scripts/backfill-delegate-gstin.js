@@ -137,7 +137,8 @@ async function revert() {
   const ex = await db.get('SELECT to_regclass($1) t', [BACKUP]);
   if (!ex || !ex.t) { console.error('No backup table — nothing to revert.'); process.exit(1); }
   const n = await db.transaction(async (tx) => {
-    const r = await tx.run(`UPDATE participants p SET gstin = b.gstin FROM ${BACKUP} b WHERE p.id = b.id`);
+    const r = await tx.run(`UPDATE participants p SET gstin = b.gstin, state_code = b.state_code
+                              FROM ${BACKUP} b WHERE p.id = b.id`);
     return r.rowCount;
   });
   console.log(`Reverted gstin on ${n} delegate(s).`);
@@ -165,7 +166,11 @@ async function main() {
     if (hit.gstin && hit.gstin.trim()) { already.push(hit.name); continue; }
     const v = validateGstin(gstin, null);
     if (!v.valid) { console.log('  skipping malformed:', gstin); continue; }
-    changes.push({ id: hit.id, name: hit.name, gstin, state: v.state });
+    // The first two digits of a GSTIN ARE the place of supply, and they are
+    // authoritative. Without state_code the invoice code treats an unknown
+    // state as intra-state and charges CGST+SGST — wrong for every delegate
+    // registered outside Tamil Nadu, which is most of them.
+    changes.push({ id: hit.id, name: hit.name, gstin, state: v.state, state_code: v.state_code });
   }
 
   console.log(`${MAP.length} GSTINs in the sheets.`);
@@ -190,9 +195,12 @@ async function main() {
 
   await db.transaction(async (tx) => {
     await tx.run(`DROP TABLE IF EXISTS ${BACKUP}`);
-    await tx.run(`CREATE TABLE ${BACKUP} AS SELECT id, gstin, NOW() AS backed_up_at
+    await tx.run(`CREATE TABLE ${BACKUP} AS SELECT id, gstin, state_code, NOW() AS backed_up_at
                     FROM participants WHERE id = ANY($1::int[])`, [changes.map((c) => c.id)]);
-    for (const c of changes) await tx.run('UPDATE participants SET gstin=$1 WHERE id=$2', [c.gstin, c.id]);
+    for (const c of changes) {
+      await tx.run('UPDATE participants SET gstin=$1, state_code=COALESCE(state_code,$2) WHERE id=$3',
+        [c.gstin, c.state_code, c.id]);
+    }
   });
   console.log(`\nApplied to ${changes.length} delegate(s). Previous values in ${BACKUP}.`);
   console.log('To undo:  node server/scripts/backfill-delegate-gstin.js --revert');
