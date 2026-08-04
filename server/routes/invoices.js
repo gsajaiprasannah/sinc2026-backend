@@ -77,7 +77,10 @@ async function loadParty(runner, module, entityId) {
     return {
       name: s.name, attention: s.contact_person || null,
       address: s.billing_address || null, gstin: s.gstin || null, state_code: s.state_code || null,
-      amount: Number(s.amount) || 0, reference: `SPONSOR-${s.id}`,
+      // Sponsors already had payment_amount long before the invoice work
+      // added `amount`; prefer whichever is set so existing sponsors are
+      // invoiceable without re-keying the figure.
+      amount: Number(s.amount || s.payment_amount) || 0, reference: `SPONSOR-${s.id}`,
       description: `SINC2026 sponsorship${s.tier ? ' — ' + s.tier : ''}`
     };
   }
