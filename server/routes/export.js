@@ -58,4 +58,151 @@ router.get('/voice-agent', async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// GET /voice-agent-attendees
+// ---------------------------------------------------------------------------
+// A SECOND, deliberately separate export in the per-attendee shape a
+// concierge-style voice agent needs ("when does Rajesh land, who is picking
+// him up, which hotel").
+//
+// THIS ONE IS NOT PUBLIC-SAFE. It contains, per named individual: mobile and
+// WhatsApp numbers, flight numbers and times, pickup point, the name and phone
+// of whoever is collecting them, their hotel and room, their assigned helper,
+// and free-text notes. It is kept as its own endpoint rather than folded into
+// /voice-agent precisely so the public-safe export stays public-safe and
+// nobody ships this one by accident.
+//
+// Before handing this file to a voice-agent vendor, confirm: the platform
+// stores it encrypted, it is not used to train a shared model, and it can be
+// deleted after the congress. Everyone in it is a real person who gave their
+// number to register for an event, not to be read out by a bot.
+
+// "9840077988" -> "+91 98400 77988".
+//
+// The +91 is only added when we actually believe the delegate is Indian.
+// Length alone is not enough: the cleanup script stripped country codes from
+// Indian numbers, leaving 10 digits, but a Singapore number like 6596192544
+// is ALSO 10 digits and is already complete. Stamping +91 on that would hand
+// the voice agent an undiallable number for every overseas delegate.
+//
+// `countryCode` is the two-letter code parsed out of the import notes; when
+// it is absent we assume India, which is right for the overwhelming majority
+// and is the same assumption the rest of the system makes.
+function formatPhone(raw, countryCode) {
+  const d = String(raw || '').replace(/\D/g, '');
+  if (!d) return null;
+  const isIndian = !countryCode || String(countryCode).toUpperCase() === 'IN';
+  if (d.length === 12 && d.startsWith('91')) return `+91 ${d.slice(2, 7)} ${d.slice(7)}`;
+  if (d.length === 10 && isIndian) return `+91 ${d.slice(0, 5)} ${d.slice(5)}`;
+  return `+${d}`;
+}
+
+// travel_datetime is stored as free text from a datetime-local input
+// ("2026-08-12T10:20"), so it is split rather than parsed as a Date — a bad
+// value should degrade to nulls, not throw or invent a date.
+function splitDateTime(v) {
+  const s = String(v || '').trim();
+  if (!s) return { date: null, time: null };
+  const m = s.match(/^(\d{4}-\d{2}-\d{2})[T\s]?(\d{2}:\d{2})?/);
+  if (!m) return { date: null, time: null };
+  return { date: m[1], time: m[2] || null };
+}
+
+// The registration-form import packed extras into notes as
+// "Company: X | Job Title: Y | City: Z | Country: IN | ...".
+function fromNotes(notes, key) {
+  const m = new RegExp(`${key}:\\s*([^|]+)`, 'i').exec(String(notes || ''));
+  if (!m) return null;
+  const v = m[1].replace(/\s+/g, ' ').replace(/[,\-\s]+$/, '').trim();
+  return v && !['na', 'n/a', '-', 'nil'].includes(v.toLowerCase()) ? v : null;
+}
+
+const COUNTRY_NAMES = { IN: 'India', SG: 'Singapore', AE: 'United Arab Emirates', LK: 'Sri Lanka', NP: 'Nepal', GB: 'United Kingdom', US: 'United States', MY: 'Malaysia', TH: 'Thailand' };
+
+router.get('/voice-agent-attendees', async (req, res) => {
+  try {
+    const rows = await db.all(`
+      SELECT p.id, p.name, p.phone, p.whatsapp, p.is_primary,
+             p.travel_mode, p.travel_number, p.travel_datetime, p.arrival_point,
+             p.departure_mode, p.departure_number, p.departure_datetime, p.departure_point,
+             p.pickup_by, p.pickup_vehicle, p.pickup_phone,
+             p.spoc_name, p.spoc_phone, p.dietary_preference, p.special_requests, p.notes,
+             r.reg_number, r.reg_type,
+             c.name AS club_name, c.city AS club_city,
+             ra.room_type, ra.room_number, h.name AS hotel_name,
+             hm.name AS spoc_member_name, hm.phone AS spoc_member_phone
+        FROM participants p
+        LEFT JOIN registrations r ON r.id = p.registration_id
+        LEFT JOIN clubs c         ON c.id = p.club_id
+        LEFT JOIN room_assignments ra ON ra.participant_id = p.id
+        LEFT JOIN hotels h        ON h.id = ra.hotel_id
+        -- The assigned helper is a delegate_assignments row with role 'SPOC',
+        -- not a column on participants — same join participants.js uses.
+        -- spoc_name/spoc_phone survive as legacy free text for older rows.
+        LEFT JOIN delegate_assignments spoc_da ON spoc_da.participant_id = p.id AND spoc_da.role = 'SPOC'
+        LEFT JOIN host_members hm ON hm.id = spoc_da.host_member_id
+       ORDER BY r.reg_number NULLS LAST, p.is_primary DESC, p.id
+    `);
+
+    const attendees = rows.map((p) => {
+      const arr = splitDateTime(p.travel_datetime);
+      const dep = splitDateTime(p.departure_datetime);
+      const countryCode = fromNotes(p.notes, 'Country');
+      // A helper is the assigned host member where there is one, otherwise the
+      // free-typed SPOC the office entered.
+      const helperName = p.spoc_member_name || p.spoc_name || null;
+      const helperPhone = p.spoc_member_phone || p.spoc_phone || null;
+      // Roll the scattered free-text fields into one sentence the agent can read.
+      const noteParts = [
+        p.dietary_preference ? `${p.dietary_preference} meals.` : null,
+        p.special_requests || null,
+        Number(p.is_primary) === 1 ? null : 'Co-registrant on this booking.',
+        p.pickup_vehicle ? `Pickup vehicle: ${p.pickup_vehicle}.` : null
+      ].filter(Boolean);
+
+      return {
+        registration_id: p.reg_number || null,
+        name: p.name || null,
+        club: p.club_name || null,
+        registration_type: p.reg_type || null,
+        coming_from_city: fromNotes(p.notes, 'City') || p.club_city || null,
+        coming_from_country: countryCode ? (COUNTRY_NAMES[countryCode.toUpperCase()] || countryCode) : 'India',
+        phone_number: formatPhone(p.phone, countryCode),
+        whatsapp_number: formatPhone(p.whatsapp || p.phone, countryCode),
+        pickup_point: p.arrival_point || null,
+        arrival_airport: p.travel_mode === 'flight' ? (p.arrival_point || null) : null,
+        arrival_flight_number: p.travel_number || null,
+        arrival_date: arr.date,
+        arrival_time: arr.time,
+        pickup_by_name: p.pickup_by || null,
+        pickup_by_phone: formatPhone(p.pickup_phone, 'IN'),
+        stay_hotel: p.hotel_name || null,
+        room_type: p.room_type || p.reg_type || null,
+        helper_name: helperName,
+        helper_phone: formatPhone(helperPhone, 'IN'),
+        departure_date: dep.date,
+        departure_flight_number: p.departure_number || null,
+        notes: noteParts.length ? noteParts.join(' ') : null
+      };
+    });
+
+    // A count of what is actually populated, so whoever hands this over can
+    // see at a glance how much is still blank rather than assuming it is full.
+    const filled = (key) => attendees.filter((a) => a[key] !== null && a[key] !== '').length;
+    const coverage = {};
+    ['phone_number', 'arrival_date', 'arrival_flight_number', 'pickup_by_name',
+     'stay_hotel', 'helper_name', 'departure_date'].forEach((k) => { coverage[k] = filled(k); });
+
+    res.json({
+      generated_at: new Date().toISOString(),
+      privacy_notice: 'CONTAINS PERSONAL DATA — mobile numbers, travel itineraries, hotel allocations and helper contacts for named individuals. Share only with a voice-agent platform that encrypts at rest, does not train shared models on it, and can delete it after the congress.',
+      total_attendees: attendees.length,
+      field_coverage: coverage,
+      sample_attendees: attendees
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 module.exports = router;
