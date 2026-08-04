@@ -95,6 +95,8 @@ app.use('/api/export', requireAdminRole, require('./routes/export'));
 // Spreadsheet-driven bulk UPDATE of delegates + host members. Admin-only and
 // deliberately separate from participants.js's /bulk-upload, which creates.
 app.use('/api/bulk-import', requireAdminRole, require('./routes/bulkImport'));
+// GST tax invoices across registrations, sponsors, stalls and host members.
+app.use('/api/invoices', requireAdminRole, require('./routes/invoices'));
 // Staff half of the QR badge feature — any logged-in login can reach these
 // routes (requireAuth, not requireAdminRole), because scan duties are now
 // assignable to non-admin logins too (host_member/volunteer/driver/

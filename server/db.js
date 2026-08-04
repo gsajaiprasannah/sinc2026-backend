@@ -1099,6 +1099,106 @@ async function initSchema() {
   // migration; the admin UI dropdown is the source of truth for the standard list.
   await pool.query(`ALTER TABLE host_members ADD COLUMN IF NOT EXISTS leadership_role TEXT;`);
 
+  // --- GST invoicing -------------------------------------------------------
+  // Single-row table holding the club's own statutory details. A table rather
+  // than environment variables so the office can correct them without a
+  // redeploy — a wrong GSTIN on an issued invoice is a real compliance
+  // problem, and they must be able to fix it the moment they notice.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_settings (
+      id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+      legal_name TEXT,
+      address TEXT,
+      city TEXT,
+      state TEXT,
+      -- The first two digits of our own GSTIN. Drives the CGST+SGST vs IGST
+      -- decision: same state as the customer means the tax splits in two.
+      state_code TEXT,
+      pincode TEXT,
+      gstin TEXT,
+      pan TEXT,
+      email TEXT,
+      phone TEXT,
+      default_gst_rate NUMERIC NOT NULL DEFAULT 18,
+      default_sac TEXT NOT NULL DEFAULT '998596',
+      -- 'inclusive' = the amount already collected contains the tax and is
+      -- back-calculated. 'exclusive' = tax is added on top, which would mean
+      -- every settled registration is short by the tax amount.
+      tax_basis TEXT NOT NULL DEFAULT 'inclusive' CHECK (tax_basis IN ('inclusive','exclusive')),
+      bank_details TEXT,
+      invoice_footer TEXT,
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+  await pool.query(`
+    INSERT INTO org_settings (id, legal_name, address, city, state, state_code, pincode)
+    VALUES (1, 'Skål Club Coimbatore',
+            '44, Raju Naidu Layout II, 100 Feet Road, Gandhipuram',
+            'Coimbatore', 'Tamil Nadu', '33', '641012')
+    ON CONFLICT (id) DO NOTHING;
+  `);
+
+  // Issued invoices. Deliberately append-only in spirit: an issued invoice is
+  // never edited, because GST requires a gapless, immutable series. A mistake
+  // is cancelled and a fresh one raised, leaving both on record.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS invoices (
+      id SERIAL PRIMARY KEY,
+      invoice_number TEXT NOT NULL UNIQUE,
+      series TEXT NOT NULL,
+      module TEXT NOT NULL CHECK (module IN ('registration','sponsor','stall','host_member')),
+      entity_id INTEGER NOT NULL,
+      invoice_date DATE NOT NULL DEFAULT CURRENT_DATE,
+      party_name TEXT NOT NULL,
+      party_address TEXT,
+      party_gstin TEXT,
+      party_state_code TEXT,
+      description TEXT,
+      sac TEXT,
+      gst_rate NUMERIC NOT NULL,
+      tax_basis TEXT NOT NULL,
+      gross_amount NUMERIC NOT NULL,
+      taxable_value NUMERIC NOT NULL,
+      cgst NUMERIC NOT NULL DEFAULT 0,
+      sgst NUMERIC NOT NULL DEFAULT 0,
+      igst NUMERIC NOT NULL DEFAULT 0,
+      total NUMERIC NOT NULL,
+      status TEXT NOT NULL DEFAULT 'issued' CHECK (status IN ('issued','cancelled')),
+      cancelled_reason TEXT,
+      created_by TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+  // One LIVE invoice per thing. Cancelled ones are excluded from the index so
+  // a corrected invoice can be raised against the same registration.
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS invoices_one_live_per_entity
+      ON invoices (module, entity_id) WHERE status = 'issued';
+  `);
+  // Per-series counter, incremented under a row lock so two admins clicking
+  // at once cannot be handed the same number.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS invoice_counters (
+      series TEXT PRIMARY KEY,
+      last_number INTEGER NOT NULL DEFAULT 0
+    );
+  `);
+
+  // Billing details needed to raise an invoice against these parties.
+  // sponsors had no amount at all — sponsorship rates were deliberately not
+  // modelled — so one is added here purely so a sponsor can be invoiced.
+  await pool.query(`ALTER TABLE sponsors ADD COLUMN IF NOT EXISTS amount NUMERIC;`);
+  await pool.query(`ALTER TABLE sponsors ADD COLUMN IF NOT EXISTS gstin TEXT;`);
+  await pool.query(`ALTER TABLE sponsors ADD COLUMN IF NOT EXISTS billing_address TEXT;`);
+  await pool.query(`ALTER TABLE sponsors ADD COLUMN IF NOT EXISTS state_code TEXT;`);
+  // Delegates: GSTIN currently only exists buried in the notes blob from the
+  // registration-form import, which cannot be edited or relied on.
+  await pool.query(`ALTER TABLE participants ADD COLUMN IF NOT EXISTS gstin TEXT;`);
+  await pool.query(`ALTER TABLE participants ADD COLUMN IF NOT EXISTS billing_address TEXT;`);
+  await pool.query(`ALTER TABLE participants ADD COLUMN IF NOT EXISTS state_code TEXT;`);
+  await pool.query(`ALTER TABLE host_members ADD COLUMN IF NOT EXISTS gstin TEXT;`);
+  await pool.query(`ALTER TABLE stall_bookings ADD COLUMN IF NOT EXISTS state_code TEXT;`);
+
   // --- Delegate company ---
   // host_members has had a `company` column since the table was created;
   // participants never did, because the original registration-form import
