@@ -183,25 +183,33 @@ async function merchSizeBreakdown(table, column) {
   const map = {};
   rows.forEach((r) => { map[r.size] = Number(r.n); });
   const known = MERCH_SIZE_ORDER.filter((s) => map[s]).map((size) => ({ size, count: map[size] }));
-  const other = Object.keys(map).filter((s) => !MERCH_SIZE_ORDER.includes(s)).sort()
+  // Off-scale sizes are mostly numeric waist measurements for the dhotis, so
+  // sort them numerically — a plain .sort() would put "40" before "8".
+  const other = Object.keys(map).filter((s) => !MERCH_SIZE_ORDER.includes(s))
+    .sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }))
     .map((size) => ({ size, count: map[size] }));
   return [...known, ...other];
 }
 router.get('/merchandise-requirement', async (req, res) => {
   try {
-    const [delegateShirt, delegateTee, hostShirt, hostTee] = await Promise.all([
+    // Waist is collected on the same forms and ordered as part of the same
+    // merchandise run, so it belongs in the procurement rollup even though
+    // it isn't charted (numeric sizes don't share an axis with XS–XXXL).
+    const [delegateShirt, delegateTee, delegateWaist, hostShirt, hostTee, hostWaist] = await Promise.all([
       merchSizeBreakdown('participants', 'shirt_size'),
       merchSizeBreakdown('participants', 'tshirt_size'),
+      merchSizeBreakdown('participants', 'waist_size'),
       merchSizeBreakdown('host_members', 'shirt_size'),
       merchSizeBreakdown('host_members', 'tshirt_size'),
+      merchSizeBreakdown('host_members', 'waist_size'),
     ]);
     const delegateTotal = (await db.get('SELECT COUNT(*)::int AS n FROM participants')).n;
     const hostTotal = (await db.get('SELECT COUNT(*)::int AS n FROM host_members')).n;
     const delegateSized = (await db.get(`SELECT COUNT(*)::int AS n FROM participants WHERE shirt_size IS NOT NULL AND shirt_size <> '' OR tshirt_size IS NOT NULL AND tshirt_size <> ''`)).n;
     const hostSized = (await db.get(`SELECT COUNT(*)::int AS n FROM host_members WHERE shirt_size IS NOT NULL AND shirt_size <> '' OR tshirt_size IS NOT NULL AND tshirt_size <> ''`)).n;
     res.json({
-      delegates: { total: delegateTotal, sizesOnFile: delegateSized, shirt: delegateShirt, tshirt: delegateTee },
-      hostMembers: { total: hostTotal, sizesOnFile: hostSized, shirt: hostShirt, tshirt: hostTee },
+      delegates: { total: delegateTotal, sizesOnFile: delegateSized, shirt: delegateShirt, tshirt: delegateTee, waist: delegateWaist },
+      hostMembers: { total: hostTotal, sizesOnFile: hostSized, shirt: hostShirt, tshirt: hostTee, waist: hostWaist },
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -321,6 +329,10 @@ const MERCH_GROUPS = [
   { table: 'participants', column: 'tshirt_size', category: 'Merchandise – Tee – Delegates', label: 'Tee' },
   { table: 'host_members', column: 'shirt_size', category: 'Merchandise – Shirt – Host Members', label: 'Shirt' },
   { table: 'host_members', column: 'tshirt_size', category: 'Merchandise – Tee – Host Members', label: 'Tee' },
+  // Waist size is collected for the dhotis, so it feeds procurement as a
+  // dhoti requirement — the size scale is the waist measurement, not S/M/L.
+  { table: 'participants', column: 'waist_size', category: 'Merchandise – Dhoti – Delegates', label: 'Dhoti' },
+  { table: 'host_members', column: 'waist_size', category: 'Merchandise – Dhoti – Host Members', label: 'Dhoti' },
 ];
 router.post('/requirements/sync-merchandise', async (req, res) => {
   try {
