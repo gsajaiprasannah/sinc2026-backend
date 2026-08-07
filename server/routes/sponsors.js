@@ -4,12 +4,30 @@ const db = require('../db');
 const { attachChecklistRoutes, deleteChecklistForOwner } = require('./checklistHelper');
 const { saveFile, deleteStoredFile } = require('../uploadHelper');
 const { logActivity } = require('../lib/activityLogger');
+const { validateGstin } = require('../lib/gst');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }); // logos: 10MB is plenty
 
 // Sponsor pass identifiers: SP-0001, SP-0002, ... — same advisory-lock
 // pattern as vehicle codes, so two concurrent submits can't collide.
+// Billing fields feed the GST invoice, so a malformed GSTIN is rejected here
+// rather than being discovered at invoicing time. The state code is derived
+// from the GSTIN's first two digits when not supplied — those two digits ARE
+// the state, and letting the two disagree silently produces the wrong tax split.
+function normaliseBilling(gstin, state_code) {
+  const g = gstin === undefined || gstin === null ? null : String(gstin).trim().toUpperCase();
+  if (g) {
+    const check = validateGstin(g, null);
+    if (!check.valid) {
+      return { error: `That GSTIN is not valid: ${(check.errors || [check.reason]).filter(Boolean).join(' ')}` };
+    }
+  }
+  let st = state_code === undefined || state_code === null ? null : String(state_code).trim();
+  if (!st && g) st = g.slice(0, 2);
+  return { gstin: g || null, state_code: st || null };
+}
+
 async function computeNextSponsorPassCode(runner) {
   const row = await runner.get(`
     SELECT COALESCE(MAX((regexp_match(sponsor_pass_code, '(\\d+)$'))[1]::int), 0) AS max_num
@@ -72,8 +90,11 @@ router.get('/:id', async (req, res) => {
 
 router.post('/', async (req, res) => {
   let { name, tier, contact_person, phone, email, sponsor_pass_code, guest_relation_host_member_id, status, notes,
-    payment_status, payment_amount, payment_mode, payment_date } = req.body;
+    payment_status, payment_amount, payment_mode, payment_date, gstin, billing_address, state_code } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'name is required' });
+  const billing = normaliseBilling(gstin, state_code);
+  if (billing.error) return res.status(400).json({ error: billing.error });
+  const { gstin: billingGstin, state_code: billingState } = billing;
   try {
     const result = await db.transaction(async (tx) => {
       await tx.run('SELECT pg_advisory_xact_lock(778901)');
@@ -82,11 +103,12 @@ router.post('/', async (req, res) => {
       }
       return tx.run(`
         INSERT INTO sponsors (name, tier, contact_person, phone, email, sponsor_pass_code, guest_relation_host_member_id, status, notes,
-          payment_status, payment_amount, payment_mode, payment_date)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id
+          payment_status, payment_amount, payment_mode, payment_date, gstin, billing_address, state_code)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id
       `, [name.trim(), tier || '', contact_person || '', phone || '', email || '', sponsor_pass_code,
           guest_relation_host_member_id || null, status || 'confirmed', notes || '',
-          payment_status || 'pending', payment_amount ? Number(payment_amount) : null, payment_mode || '', payment_date || null]);
+          payment_status || 'pending', payment_amount ? Number(payment_amount) : null, payment_mode || '', payment_date || null,
+          billingGstin, billing_address || null, billingState]);
     });
     logActivity(req.user, { action: 'create', entityType: 'sponsor', entityId: result.id, label: name.trim() });
     res.json({ id: result.id, sponsor_pass_code });
@@ -100,8 +122,13 @@ router.post('/', async (req, res) => {
 
 router.put('/:id', async (req, res) => {
   const { name, tier, contact_person, phone, email, guest_relation_host_member_id, status, notes,
-    payment_status, payment_amount, payment_mode, payment_date } = req.body;
+    payment_status, payment_amount, payment_mode, payment_date, gstin, billing_address, state_code } = req.body;
+  const billing = normaliseBilling(gstin, state_code);
+  if (billing.error) return res.status(400).json({ error: billing.error });
   try {
+    // Billing fields are set directly rather than via COALESCE: clearing a
+    // GSTIN (sponsor turns out not to be registered) has to be possible, and
+    // COALESCE would silently keep the old value when blank is sent.
     await db.run(`
       UPDATE sponsors SET
         name=COALESCE($1,name), tier=COALESCE($2,tier), contact_person=COALESCE($3,contact_person),
@@ -111,13 +138,21 @@ router.put('/:id', async (req, res) => {
         payment_status=COALESCE($9,payment_status),
         payment_amount=COALESCE($10,payment_amount),
         payment_mode=COALESCE($11,payment_mode),
-        payment_date=COALESCE($12,payment_date)
+        payment_date=COALESCE($12,payment_date),
+        gstin=CASE WHEN $14::boolean THEN $15 ELSE gstin END,
+        billing_address=CASE WHEN $16::boolean THEN $17 ELSE billing_address END,
+        state_code=CASE WHEN $18::boolean THEN $19 ELSE state_code END
       WHERE id=$13
     `, [name || null, tier !== undefined ? tier : null, contact_person !== undefined ? contact_person : null,
         phone !== undefined ? phone : null, email !== undefined ? email : null,
         guest_relation_host_member_id || null, status || null, notes !== undefined ? notes : null,
         payment_status || null, payment_amount !== undefined && payment_amount !== '' ? Number(payment_amount) : null,
-        payment_mode !== undefined ? payment_mode : null, payment_date || null, req.params.id]);
+        payment_mode !== undefined ? payment_mode : null, payment_date || null, req.params.id,
+        gstin !== undefined, billing.gstin,
+        billing_address !== undefined, billing_address || null,
+        // The state is also rewritten whenever a GSTIN is sent, so the pair
+        // cannot end up out of step with each other.
+        state_code !== undefined || gstin !== undefined, billing.state_code]);
     logActivity(req.user, { action: 'update', entityType: 'sponsor', entityId: Number(req.params.id), label: name });
     res.json({ ok: true });
   } catch (e) {
