@@ -317,6 +317,118 @@ router.post('/issue', async (req, res) => {
   }
 });
 
+// --- billing readiness -----------------------------------------------------
+
+// A work queue of everyone who could be invoiced, and what is missing from
+// their billing details. The point is to fix those gaps from the paperwork
+// already on file BEFORE a delegate asks for an invoice — because correcting a
+// name or GSTIN after the invoice has been issued and emailed costs a reissue
+// or an edit-with-reason, whereas correcting it here costs nothing at all.
+//
+// Set-based rather than looping loadParty per entity: this runs over every
+// registration, sponsor, stall and host member at once, and a per-row query
+// would be ~200 round trips for a screen that gets opened repeatedly.
+const READINESS_SQL = {
+  registration: `
+    SELECT r.id AS entity_id, r.reg_number AS reference, r.amount_paid AS amount,
+           p.name AS contact_name, p.company, p.gstin, p.billing_address, p.state_code, p.email
+      FROM registrations r
+      LEFT JOIN participants p ON p.registration_id = r.id AND p.is_primary = 1
+     WHERE COALESCE(r.amount_paid, 0) > 0`,
+  sponsor: `
+    SELECT s.id AS entity_id, 'SPONSOR-' || s.id AS reference,
+           COALESCE(s.amount, s.payment_amount) AS amount,
+           s.contact_person AS contact_name, s.name AS company,
+           s.gstin, s.billing_address, s.state_code, s.email
+      FROM sponsors s
+     WHERE COALESCE(s.amount, s.payment_amount, 0) > 0 AND s.status <> 'cancelled'`,
+  stall: `
+    SELECT b.id AS entity_id, 'STALL-' || b.id AS reference, b.amount,
+           b.contact_person AS contact_name, b.company_name AS company,
+           b.gstin, NULL AS billing_address, b.state_code, b.email
+      FROM stall_bookings b
+     WHERE COALESCE(b.amount, 0) > 0 AND b.status <> 'cancelled'`,
+  host_member: `
+    SELECT h.id AS entity_id, 'HOST-' || h.id AS reference, h.payment_amount AS amount,
+           h.name AS contact_name, h.company, h.gstin,
+           NULL AS billing_address, NULL AS state_code, h.email
+      FROM host_members h
+     WHERE COALESCE(h.payment_amount, 0) > 0 AND h.payment_status = 'paid'`
+};
+
+// Severity matters: a wrong GSTIN produces an invoice the recipient cannot use
+// and which cannot be corrected without a reissue, so it outranks a missing
+// address, which is cosmetic on most invoices.
+function billingIssues(row) {
+  const issues = [];
+  if (!row.gstin) issues.push({ field: 'gstin', severity: 'warn', text: 'No GSTIN — would be invoiced as B2C' });
+  else if (!validateGstin(row.gstin, null).valid) issues.push({ field: 'gstin', severity: 'error', text: `GSTIN "${row.gstin}" fails validation` });
+  if (row.gstin && !row.state_code) issues.push({ field: 'state_code', severity: 'error', text: 'GSTIN on file but no state code — tax split may be wrong' });
+  if (!row.email) issues.push({ field: 'email', severity: 'warn', text: 'No email — invoice cannot be sent' });
+  if (!row.billing_address) issues.push({ field: 'billing_address', severity: 'info', text: 'No billing address' });
+  if (!row.company && !row.contact_name) issues.push({ field: 'party_name', severity: 'error', text: 'No name or company to bill' });
+  return issues;
+}
+
+router.get('/billing-readiness', async (req, res) => {
+  try {
+    const wanted = req.query.module && READINESS_SQL[req.query.module]
+      ? [req.query.module] : Object.keys(READINESS_SQL);
+
+    // One lookup of live invoices, so the report can mark who is already done
+    // and — more usefully — flag anyone whose details changed after invoicing.
+    const live = await db.all(`SELECT module, entity_id, invoice_number, party_gstin, party_name FROM invoices WHERE status = 'issued'`);
+    const liveBy = {};
+    live.forEach((i) => { liveBy[`${i.module}:${i.entity_id}`] = i; });
+
+    const out = [];
+    for (const mod of wanted) {
+      const rows = await db.all(READINESS_SQL[mod]);
+      rows.forEach((r) => {
+        const inv = liveBy[`${mod}:${r.entity_id}`] || null;
+        const issues = billingIssues(r);
+        out.push({
+          module: mod,
+          module_label: MODULES[mod].label,
+          entity_id: r.entity_id,
+          reference: r.reference,
+          party_name: r.company || r.contact_name || '',
+          contact_name: r.contact_name || '',
+          amount: Number(r.amount) || 0,
+          gstin: r.gstin || '',
+          state_code: r.state_code || '',
+          billing_address: r.billing_address || '',
+          email: r.email || '',
+          invoice_number: inv ? inv.invoice_number : null,
+          // Once invoiced, a details change is no longer free — surface it.
+          drifted: !!(inv && (inv.party_gstin || '') !== (r.gstin || '')),
+          issues,
+          status: issues.some((i) => i.severity === 'error') ? 'error'
+            : issues.some((i) => i.severity === 'warn') ? 'warn' : 'ready'
+        });
+      });
+    }
+
+    out.sort((a, b) => {
+      const rank = { error: 0, warn: 1, ready: 2 };
+      if (rank[a.status] !== rank[b.status]) return rank[a.status] - rank[b.status];
+      return b.amount - a.amount; // biggest money first within a band
+    });
+
+    const summary = {
+      total: out.length,
+      ready: out.filter((r) => r.status === 'ready').length,
+      warn: out.filter((r) => r.status === 'warn').length,
+      error: out.filter((r) => r.status === 'error').length,
+      invoiced: out.filter((r) => r.invoice_number).length,
+      drifted: out.filter((r) => r.drifted).length
+    };
+    res.json({ ok: true, summary, rows: out });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // --- list / fetch / cancel -------------------------------------------------
 
 router.get('/', async (req, res) => {
