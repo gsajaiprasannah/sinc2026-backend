@@ -576,6 +576,29 @@ router.post('/bulk-upload', upload.single('file'), async (req, res) => {
         }
         const club = r.club_name ? await tx.get('SELECT id FROM clubs WHERE name = $1', [r.club_name]) : null;
         const reg = r.reg_number ? await tx.get('SELECT id FROM registrations WHERE reg_number = $1', [r.reg_number]) : null;
+
+        // Same capacity/primary rules the single-delegate POST enforces. This
+        // was previously missing here, which is how a single registration ended
+        // up holding more delegates than its reg_type allows, and how two
+        // primary registrants could exist on one registration.
+        //
+        // Deliberately NOT overridable by the row's `force` flag: force exists
+        // to say "yes, I know this looks like a duplicate person", which is a
+        // judgement call. Over-filling a registration is not — it makes the
+        // registration itself incoherent, so the row is skipped and reported.
+        //
+        // Because this runs inside the import transaction, the check also sees
+        // rows inserted earlier in this same file, so a CSV that lists three
+        // delegates against one double registration is caught on the third row
+        // rather than only on a later re-import.
+        if (reg) {
+          const capacityError = await checkRegistrationCapacity(tx, reg.id, r.is_primary);
+          if (capacityError) {
+            skipped.push({ name: r.name, reason: capacityError });
+            continue;
+          }
+        }
+
         await tx.run(`
           INSERT INTO participants
             (registration_id, is_primary, name, phone, whatsapp, email, address, club_id, designation, dietary_preference,
