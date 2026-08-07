@@ -1184,6 +1184,34 @@ async function initSchema() {
     );
   `);
 
+  // Where the invoice was emailed, and when. Captured on the invoice itself
+  // rather than read live from the delegate/sponsor record because the address
+  // it actually went to is a fact about the send, and the source record may be
+  // edited afterwards.
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS party_email TEXT;`);
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS emailed_at TIMESTAMP;`);
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS emailed_to TEXT;`);
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS email_count INTEGER NOT NULL DEFAULT 0;`);
+
+  // Edit history for issued invoices. An issued tax invoice can be corrected
+  // in place here (the number stays valid, so a copy already in someone's
+  // inbox isn't orphaned), but every change is written here first — field,
+  // old value, new value, who, when — so the figures can still be explained
+  // at audit. Nothing ever updates or deletes rows in this table.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS invoice_revisions (
+      id SERIAL PRIMARY KEY,
+      invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+      field TEXT NOT NULL,
+      old_value TEXT,
+      new_value TEXT,
+      reason TEXT,
+      changed_by TEXT,
+      changed_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS invoice_revisions_invoice_idx ON invoice_revisions (invoice_id);`);
+
   // Billing details needed to raise an invoice against these parties.
   // sponsors had no amount at all — sponsorship rates were deliberately not
   // modelled — so one is added here purely so a sponsor can be invoiced.

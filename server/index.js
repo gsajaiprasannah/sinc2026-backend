@@ -21,8 +21,13 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'sinc2026admin';
 // (e.g. https://sinc2026.com).
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || true;
 app.use(cors({ origin: ALLOWED_ORIGIN, credentials: true }));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// 15mb rather than the 100kb default: invoice emailing posts the rendered PDF
+// as base64 in the JSON body (see routes/invoices.js — the browser renders it
+// so the emailed copy is identical to the downloaded one), and base64 inflates
+// a PDF by about a third. A per-route override cannot work here because this
+// parser runs first and would already have rejected the request.
+app.use(express.json({ limit: '15mb' }));
+app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 
 // Static frontend + locally-stored media (when R2 isn't configured).
 // admin.html and index.html are both served openly as static HTML — each

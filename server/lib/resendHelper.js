@@ -19,7 +19,11 @@ function isConfigured() {
 // Returns { ok: true, id } on success, or { ok: false, error } on failure —
 // never throws, so a caller looping over many recipients doesn't need a
 // try/catch around every single send.
-async function sendEmail({ to, subject, html, fromName }) {
+// `attachments` is optional: [{ filename, content }] where content is a base64
+// string (no data: prefix). Used by the invoice mailer to attach the same PDF
+// the admin panel generates, so the emailed copy and the downloaded copy are
+// byte-identical rather than two separately-rendered documents that could drift.
+async function sendEmail({ to, subject, html, fromName, attachments, replyTo }) {
   if (!process.env.RESEND_API_KEY) {
     return { ok: false, error: 'RESEND_API_KEY is not set on the server — add it in Render\'s Environment tab.' };
   }
@@ -27,6 +31,11 @@ async function sendEmail({ to, subject, html, fromName }) {
     return { ok: false, error: 'to, subject, and html are all required.' };
   }
   const from = `${(fromName || 'SINC2026 Congress').replace(/[<>]/g, '')} <${DEFAULT_FROM_EMAIL}>`;
+  const payload = { from, to: [to], subject, html };
+  if (Array.isArray(attachments) && attachments.length) {
+    payload.attachments = attachments.map((a) => ({ filename: a.filename, content: a.content }));
+  }
+  if (replyTo) payload.reply_to = replyTo;
   try {
     const r = await fetch(RESEND_API_URL, {
       method: 'POST',
@@ -34,7 +43,7 @@ async function sendEmail({ to, subject, html, fromName }) {
         'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ from, to: [to], subject, html })
+      body: JSON.stringify(payload)
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) {
