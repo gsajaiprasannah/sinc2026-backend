@@ -1300,6 +1300,26 @@ async function initSchema() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS stalls_hall_idx ON stalls(hall_id);`);
 
+  // --- Host member stalls (Hall B) ---
+  // Hall B is set aside for host members rather than paying exhibitors: one
+  // stall each, complimentary as part of their host contribution. That is a
+  // fundamentally different relationship from stall_bookings, which models the
+  // enquiry -> billed -> allocated sale of a stall to an outside company, and
+  // carries amount/payment/GST columns that would all be meaningless here.
+  // So the link lives directly on the stall.
+  //
+  // Both kinds of occupancy still flip stalls.status to 'allocated', which is
+  // what stops an exhibitor booking and a host member being given the same
+  // stall — stallBookings.js already refuses to allocate a stall in that state.
+  await pool.query(`ALTER TABLE stalls ADD COLUMN IF NOT EXISTS host_member_id INTEGER REFERENCES host_members(id) ON DELETE SET NULL;`);
+  // One stall per host member, enforced by the database rather than only in the
+  // route, so a double-click or a concurrent assignment cannot produce two.
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS stalls_one_per_host_member
+      ON stalls (host_member_id) WHERE host_member_id IS NOT NULL;
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS stalls_host_member_idx ON stalls(host_member_id);`);
+
   // The enquiry -> billed -> allocated workflow itself. One stall per
   // booking (a company wanting several stalls submits several enquiries).
   // The buyer is always an outside exhibitor/vendor company — not

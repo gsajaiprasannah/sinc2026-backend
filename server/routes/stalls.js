@@ -13,16 +13,169 @@ router.get('/', async (req, res) => {
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
     const rows = await db.all(`
       SELECT s.*, h.name AS hall_name,
-        b.id AS booking_id, b.company_name AS booked_company_name, b.status AS booking_status
+        b.id AS booking_id, b.company_name AS booked_company_name, b.status AS booking_status,
+        hm.name AS host_member_name, hm.company AS host_member_company, hm.phone AS host_member_phone
       FROM stalls s
       JOIN stall_halls h ON h.id = s.hall_id
       LEFT JOIN stall_bookings b ON b.stall_id = s.id AND b.status <> 'cancelled'
+      LEFT JOIN host_members hm ON hm.id = s.host_member_id
       ${where}
       ORDER BY h.name, s.stall_number
     `, params);
     res.json(rows);
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// --- host member stalls ----------------------------------------------------
+// Hall B stalls belong to host members, one each, complimentary. Kept entirely
+// separate from the exhibitor booking workflow (see the note in db.js), but
+// sharing stalls.status so the two can never be given the same stall.
+
+// Who still needs a stall, and which stalls are free. Drives both the picker
+// and the bulk assign preview.
+router.get('/host-member-availability', async (req, res) => {
+  try {
+    const members = await db.all(`
+      SELECT hm.id, hm.name, hm.company, hm.phone,
+             s.id AS stall_id, s.stall_number, h.name AS hall_name
+        FROM host_members hm
+        LEFT JOIN stalls s ON s.host_member_id = hm.id
+        LEFT JOIN stall_halls h ON h.id = s.hall_id
+       ORDER BY hm.name
+    `);
+    const freeStalls = await db.all(`
+      SELECT s.id, s.stall_number, s.hall_id, h.name AS hall_name
+        FROM stalls s
+        JOIN stall_halls h ON h.id = s.hall_id
+       WHERE s.host_member_id IS NULL
+         AND NOT EXISTS (SELECT 1 FROM stall_bookings b WHERE b.stall_id = s.id AND b.status <> 'cancelled')
+       ORDER BY h.name, s.stall_number
+    `);
+    res.json({
+      ok: true,
+      members,
+      free_stalls: freeStalls,
+      summary: {
+        host_members: members.length,
+        assigned: members.filter((m) => m.stall_id).length,
+        unassigned: members.filter((m) => !m.stall_id).length,
+        free_stalls: freeStalls.length
+      }
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Assign (host_member_id set) or release (null) a single stall.
+router.put('/:id/host-member', async (req, res) => {
+  const hostMemberId = req.body.host_member_id === null || req.body.host_member_id === '' || req.body.host_member_id === undefined
+    ? null : Number(req.body.host_member_id);
+  try {
+    const out = await db.transaction(async (tx) => {
+      const stall = await tx.get(`
+        SELECT s.*, h.name AS hall_name FROM stalls s JOIN stall_halls h ON h.id = s.hall_id WHERE s.id = $1
+      `, [req.params.id]);
+      if (!stall) throw Object.assign(new Error('Stall not found.'), { statusCode: 404 });
+
+      // A stall sold to an exhibitor cannot also be a host member's.
+      const booking = await tx.get(
+        `SELECT id, company_name FROM stall_bookings WHERE stall_id = $1 AND status <> 'cancelled'`, [stall.id]);
+      if (booking && hostMemberId) {
+        throw Object.assign(
+          new Error(`Stall ${stall.stall_number} is booked by ${booking.company_name}. Release that booking first.`),
+          { statusCode: 409 });
+      }
+
+      if (hostMemberId) {
+        const hm = await tx.get('SELECT id, name FROM host_members WHERE id = $1', [hostMemberId]);
+        if (!hm) throw Object.assign(new Error('Host member not found.'), { statusCode: 400 });
+        const held = await tx.get(`
+          SELECT s.stall_number, h.name AS hall_name FROM stalls s JOIN stall_halls h ON h.id = s.hall_id
+           WHERE s.host_member_id = $1 AND s.id <> $2`, [hostMemberId, stall.id]);
+        if (held) {
+          throw Object.assign(
+            new Error(`${hm.name} already has ${held.hall_name} ${held.stall_number}. Release that one first.`),
+            { statusCode: 409 });
+        }
+        await tx.run(`UPDATE stalls SET host_member_id = $1, status = 'allocated', updated_at = NOW() WHERE id = $2`,
+          [hostMemberId, stall.id]);
+        return { assigned: hm.name, stall_number: stall.stall_number, hall_name: stall.hall_name };
+      }
+
+      // Releasing: only drop back to 'available' if no live booking holds it.
+      await tx.run(`
+        UPDATE stalls SET host_member_id = NULL,
+               status = CASE WHEN $2::boolean THEN status ELSE 'available' END,
+               updated_at = NOW()
+         WHERE id = $1`, [stall.id, !!booking]);
+      return { released: true, stall_number: stall.stall_number, hall_name: stall.hall_name };
+    });
+
+    logActivity(req.user, {
+      action: 'update', entityType: 'stall', entityId: Number(req.params.id),
+      label: out.released ? `Released ${out.hall_name} ${out.stall_number}` : `${out.hall_name} ${out.stall_number} -> ${out.assigned}`
+    });
+    res.json({ ok: true, ...out });
+  } catch (e) {
+    if (e.code === '23505') return res.status(409).json({ error: 'That host member already holds a stall.' });
+    res.status(e.statusCode || 500).json({ error: e.message });
+  }
+});
+
+// Bulk assign every unassigned host member to a free stall in one hall, in name
+// order. Preview by default — nothing is written without apply:true, because
+// this touches up to 75 rows and getting it wrong means unpicking all of them.
+router.post('/host-member-bulk-assign', async (req, res) => {
+  const hallId = Number(req.body.hall_id);
+  const apply = req.body.apply === true;
+  if (!hallId) return res.status(400).json({ error: 'hall_id is required.' });
+  try {
+    const result = await db.transaction(async (tx) => {
+      const hall = await tx.get('SELECT id, name FROM stall_halls WHERE id = $1', [hallId]);
+      if (!hall) throw Object.assign(new Error('Hall not found.'), { statusCode: 404 });
+
+      const pending = await tx.all(`
+        SELECT hm.id, hm.name, hm.company FROM host_members hm
+         WHERE NOT EXISTS (SELECT 1 FROM stalls s WHERE s.host_member_id = hm.id)
+         ORDER BY hm.name
+      `);
+      const free = await tx.all(`
+        SELECT s.id, s.stall_number FROM stalls s
+         WHERE s.hall_id = $1 AND s.host_member_id IS NULL
+           AND NOT EXISTS (SELECT 1 FROM stall_bookings b WHERE b.stall_id = s.id AND b.status <> 'cancelled')
+         ORDER BY LENGTH(s.stall_number), s.stall_number
+      `, [hallId]);
+
+      const pairs = pending.slice(0, free.length).map((m, i) => ({
+        host_member_id: m.id, host_member_name: m.name, company: m.company,
+        stall_id: free[i].id, stall_number: free[i].stall_number
+      }));
+
+      if (apply) {
+        for (const p of pairs) {
+          await tx.run(`UPDATE stalls SET host_member_id = $1, status = 'allocated', updated_at = NOW() WHERE id = $2`,
+            [p.host_member_id, p.stall_id]);
+        }
+      }
+      return {
+        hall: hall.name, applied: apply, pairs,
+        unassigned_members: pending.length,
+        free_stalls: free.length,
+        left_without_stall: Math.max(0, pending.length - free.length),
+        spare_stalls: Math.max(0, free.length - pending.length)
+      };
+    });
+
+    if (apply && result.pairs.length) {
+      logActivity(req.user, { action: 'update', entityType: 'stall', label: `Bulk-assigned ${result.pairs.length} ${result.hall} stall(s) to host members` });
+    }
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    if (e.code === '23505') return res.status(409).json({ error: 'A host member in this batch already holds a stall — refresh and try again.' });
+    res.status(e.statusCode || 500).json({ error: e.message });
   }
 });
 

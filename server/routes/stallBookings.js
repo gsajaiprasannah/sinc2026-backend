@@ -62,8 +62,19 @@ router.put('/:id', async (req, res) => {
           await tx.run(`UPDATE stalls SET status='available', updated_at=NOW() WHERE id=$1`, [existing.stall_id]);
         }
         if (nextStallId) {
-          const stall = await tx.get('SELECT id, status FROM stalls WHERE id=$1', [nextStallId]);
+          const stall = await tx.get(`
+            SELECT s.id, s.status, s.stall_number, hm.name AS host_member_name
+              FROM stalls s LEFT JOIN host_members hm ON hm.id = s.host_member_id
+             WHERE s.id = $1`, [nextStallId]);
           if (!stall) throw Object.assign(new Error('Selected stall not found'), { statusCode: 400 });
+          // A Hall B stall held by a host member is 'allocated' too, so say
+          // which kind of occupant is in the way rather than reporting a
+          // booking clash that the user will not be able to find.
+          if (stall.host_member_name) {
+            throw Object.assign(
+              new Error(`Stall ${stall.stall_number} is a host member stall held by ${stall.host_member_name}. Release it from the Halls & Stalls tab first.`),
+              { statusCode: 409 });
+          }
           if (stall.status === 'allocated') {
             throw Object.assign(new Error('That stall is already allocated to another booking. Pick a different one.'), { statusCode: 409 });
           }
