@@ -196,7 +196,7 @@ router.get('/preview/:module/:entityId', async (req, res) => {
 
     const rate = Number(req.query.rate ?? org.default_gst_rate);
     const basis = req.query.basis || org.tax_basis;
-    const gst = computeGst({ amount: party.amount, rate, basis, orgStateCode: org.state_code, partyStateCode: party.state_code });
+    const gst = computeGst({ amount: party.amount, rate, basis, orgStateCode: org.state_code, partyStateCode: party.state_code, partyGstin: party.gstin });
     const partyCheck = party.gstin ? validateGstin(party.gstin, null) : null;
 
     res.json({
@@ -291,21 +291,26 @@ router.post('/issue', async (req, res) => {
 
       const rate = Number(req.body.rate ?? org.default_gst_rate);
       const basis = req.body.basis || org.tax_basis;
-      const gst = computeGst({ amount: party.amount, rate, basis, orgStateCode: org.state_code, partyStateCode: party.state_code });
+      const gst = computeGst({ amount: party.amount, rate, basis, orgStateCode: org.state_code, partyStateCode: party.state_code, partyGstin: party.gstin });
       const { series, invoice_number } = await nextInvoiceNumber(tx, cfg.series);
 
       const row = await tx.run(`
         INSERT INTO invoices
           (invoice_number, series, module, entity_id, party_name, party_address, party_gstin, party_state_code,
-           party_email, description, sac, gst_rate, tax_basis, gross_amount, taxable_value, cgst, sgst, igst, total, created_by)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+           party_email, description, sac, gst_rate, tax_basis, gross_amount, taxable_value, cgst, sgst, igst, total, created_by,
+           place_of_supply, place_of_supply_code)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
         RETURNING id
       `, [invoice_number, series, module, entityId,
           party.attention ? `${party.name} (Attn: ${party.attention})` : party.name,
-          party.address, party.gstin, party.state_code, party.email,
+          party.address, party.gstin,
+          // The stored state follows the place of supply actually applied, so
+          // the invoice can never show a state that disagrees with its own tax.
+          gst.place_of_supply_code || party.state_code, party.email,
           req.body.description || party.description, org.default_sac, rate, basis,
           party.amount, gst.taxable_value, gst.cgst, gst.sgst, gst.igst, gst.total,
-          req.user ? req.user.username : null]);
+          req.user ? req.user.username : null,
+          gst.place_of_supply, gst.place_of_supply_code]);
 
       return { id: row.id, invoice_number };
     });
@@ -583,7 +588,12 @@ router.put('/:id', async (req, res) => {
       // calculation is redone from scratch — never trust a client-sent total.
       const wantsMoneyChange = ['gross_amount', 'gst_rate', 'tax_basis'].some(
         (f) => Object.prototype.hasOwnProperty.call(req.body, f)
-      ) || Object.prototype.hasOwnProperty.call(req.body, 'party_state_code');
+      )
+        || Object.prototype.hasOwnProperty.call(req.body, 'party_state_code')
+        // The GSTIN decides the place of supply, and therefore whether this is
+        // CGST+SGST or IGST — so adding or changing one has to re-run the tax,
+        // not just relabel the invoice.
+        || Object.prototype.hasOwnProperty.call(req.body, 'party_gstin');
 
       if (wantsMoneyChange) {
         const amount = Number(req.body.gross_amount ?? inv.gross_amount);
@@ -593,7 +603,9 @@ router.put('/:id', async (req, res) => {
         if (!(rate >= 0)) { const e = new Error('The GST rate must be zero or more.'); e.status = 400; throw e; }
         const partyState = Object.prototype.hasOwnProperty.call(req.body, 'party_state_code')
           ? req.body.party_state_code : inv.party_state_code;
-        const gst = computeGst({ amount, rate, basis, orgStateCode: org.state_code, partyStateCode: partyState });
+        const partyGstinForTax = Object.prototype.hasOwnProperty.call(req.body, 'party_gstin')
+          ? req.body.party_gstin : inv.party_gstin;
+        const gst = computeGst({ amount, rate, basis, orgStateCode: org.state_code, partyStateCode: partyState, partyGstin: partyGstinForTax });
         stage('gross_amount', amount);
         stage('gst_rate', rate);
         stage('tax_basis', basis);
@@ -601,6 +613,8 @@ router.put('/:id', async (req, res) => {
         stage('cgst', gst.cgst);
         stage('sgst', gst.sgst);
         stage('igst', gst.igst);
+        stage('place_of_supply_code', gst.place_of_supply_code);
+        stage('place_of_supply', gst.place_of_supply);
         stage('total', gst.total);
       }
 

@@ -86,17 +86,73 @@ function validateGstin(raw, expectedStateCode) {
 const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 
 /**
+ * Determines the PLACE OF SUPPLY, which is what actually decides CGST+SGST
+ * versus IGST — not the recipient's postal address, and not their GSTIN alone.
+ *
+ * The congress is an event held in Coimbatore, so the relevant provision is
+ * IGST Act s.12(7) — services by way of organisation of, or admission to, an
+ * event:
+ *
+ *   s.12(7)(a)(i)  recipient is a REGISTERED person
+ *                  -> place of supply is the LOCATION OF THE RECIPIENT,
+ *                     i.e. the state of the GSTIN they give us.
+ *
+ *   s.12(7)(b)     recipient is UNREGISTERED
+ *                  -> place of supply is where the EVENT IS ACTUALLY HELD,
+ *                     i.e. Tamil Nadu, whatever address they gave us.
+ *
+ * The practical consequences, which are easy to get wrong:
+ *
+ *   - A delegate with a Maharashtra GSTIN is an inter-state supply: IGST.
+ *   - A delegate from Maharashtra with NO GSTIN is still an INTRA-state
+ *     supply, because the event is in Tamil Nadu: CGST + SGST. Charging them
+ *     IGST would be wrong even though they live outside the state.
+ *   - The state is always read from the GSTIN's first two digits. A separately
+ *     typed state code is never allowed to override it, because GST
+ *     registration is state-specific and the GSTIN is the authoritative fact.
+ *
+ * s.12(7) applies where the recipient is in India. A foreign delegate with no
+ * Indian registration is out of scope of this helper — treat those separately
+ * and take advice; this returns the event's own state for them, which keeps
+ * them intra-state rather than silently inventing an export.
+ *
+ * Not tax advice: the rate, the SAC and whether a given receipt is a taxable
+ * supply at all remain decisions for whoever files the returns.
+ */
+function placeOfSupply({ orgStateCode, partyGstin, partyStateCode }) {
+  const eventState = String(orgStateCode || '');
+  const g = String(partyGstin || '').trim().toUpperCase();
+  const registered = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]Z[0-9A-Z]$/.test(g);
+
+  if (registered) {
+    return {
+      state_code: g.slice(0, 2),
+      registered: true,
+      basis: 'Recipient is registered — place of supply is the recipient\'s state (IGST Act s.12(7)(a)(i)).'
+    };
+  }
+  // Unregistered: the event's own location governs, so anything typed into a
+  // state field is deliberately ignored here rather than quietly producing
+  // IGST on a B2C invoice.
+  return {
+    state_code: eventState,
+    registered: false,
+    ignored_state_code: partyStateCode && String(partyStateCode) !== eventState ? String(partyStateCode) : null,
+    basis: 'Recipient is unregistered — place of supply is where the event is held (IGST Act s.12(7)(b)).'
+  };
+}
+
+/**
  * Splits an amount into taxable value and tax.
  *
  *   basis 'inclusive' — `amount` already contains the tax (what was collected)
  *   basis 'exclusive' — tax is added on top of `amount`
  *
- * Intra-state supply (customer in our own state, or no GSTIN/state known)
- * splits the tax equally into CGST and SGST. Inter-state charges IGST.
- * When the customer's state is unknown we treat it as intra-state, because
- * that is where the congress is held and where the supply is consumed.
+ * Intra-state supply splits the tax equally into CGST and SGST; inter-state
+ * charges IGST. Which of the two applies is decided by placeOfSupply() above,
+ * not by comparing addresses.
  */
-function computeGst({ amount, rate, basis, orgStateCode, partyStateCode }) {
+function computeGst({ amount, rate, basis, orgStateCode, partyStateCode, partyGstin }) {
   const amt = Number(amount) || 0;
   const r = Number(rate) || 0;
   const inclusive = basis === 'inclusive';
@@ -106,7 +162,9 @@ function computeGst({ amount, rate, basis, orgStateCode, partyStateCode }) {
   // Derive tax from the two rounded ends so the three figures always reconcile.
   const tax = round2(total - taxable);
 
-  const interState = !!(partyStateCode && orgStateCode && String(partyStateCode) !== String(orgStateCode));
+  const pos = placeOfSupply({ orgStateCode, partyGstin, partyStateCode });
+  const interState = !!(orgStateCode && pos.state_code && pos.state_code !== String(orgStateCode));
+
   let cgst = 0, sgst = 0, igst = 0;
   if (interState) {
     igst = tax;
@@ -116,7 +174,18 @@ function computeGst({ amount, rate, basis, orgStateCode, partyStateCode }) {
     sgst = round2(tax - cgst);
   }
 
-  return { taxable_value: taxable, cgst, sgst, igst, total, tax, inter_state: interState, rate: r, basis };
+  return {
+    taxable_value: taxable, cgst, sgst, igst, total, tax,
+    inter_state: interState, rate: r, basis,
+    // Rule 46(n) of the CGST Rules requires the place of supply, with the name
+    // of the state, on any inter-state invoice — so it is returned here to be
+    // printed rather than merely used and discarded.
+    place_of_supply_code: pos.state_code || null,
+    place_of_supply: pos.state_code ? (STATE_CODES[pos.state_code] || null) : null,
+    place_of_supply_basis: pos.basis,
+    recipient_registered: pos.registered,
+    ignored_state_code: pos.ignored_state_code || null
+  };
 }
 
 // "22000" -> "Twenty Two Thousand Rupees Only" — required on a tax invoice.
@@ -153,4 +222,4 @@ function amountInWords(amount) {
   return s + ' Only';
 }
 
-module.exports = { validateGstin, computeGst, amountInWords, numberToWords, round2, STATE_CODES, PAN_ENTITY, gstinCheckDigit };
+module.exports = { validateGstin, computeGst, placeOfSupply, amountInWords, numberToWords, round2, STATE_CODES, PAN_ENTITY, gstinCheckDigit };

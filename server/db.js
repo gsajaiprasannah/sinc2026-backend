@@ -1188,6 +1188,12 @@ async function initSchema() {
   // rather than read live from the delegate/sponsor record because the address
   // it actually went to is a fact about the send, and the source record may be
   // edited afterwards.
+  // Rule 46(n) of the CGST Rules requires the place of supply, together with
+  // the name of the state, on an inter-state invoice. Stored on the invoice
+  // rather than recomputed on display, because it is a fact about the supply
+  // as it was assessed, and the party's GSTIN may be corrected later.
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS place_of_supply TEXT;`);
+  await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS place_of_supply_code TEXT;`);
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS party_email TEXT;`);
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS emailed_at TIMESTAMP;`);
   await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS emailed_to TEXT;`);
