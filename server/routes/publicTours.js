@@ -56,6 +56,30 @@ async function loadPublicTours(runner) {
   }));
 }
 
+// --- kill switch -----------------------------------------------------------
+// The tours QR code is printed and already circulating, so the page has to be
+// withdrawable without a deploy and without touching any data. When the switch
+// is off every public tours endpoint answers 410 Gone: the link is dead to
+// anyone scanning the QR, while the tours, the sign-ups and the co-registrants
+// all remain exactly as they are and come straight back when it is turned on.
+//
+// Applied as router-level middleware rather than per-route so a route added
+// later cannot accidentally stay open after the page has been withdrawn.
+async function toursArePublic() {
+  const row = await db.get(`SELECT enabled FROM public_switches WHERE key = 'public_tours'`);
+  // Absent row means nobody has ever turned it off — default to open.
+  return !row || row.enabled === true;
+}
+
+router.use(async (req, res, next) => {
+  try {
+    if (await toursArePublic()) return next();
+    res.status(410).json({ error: 'Tour registration is not available.', closed: true });
+  } catch (e) {
+    next(e);
+  }
+});
+
 // --- routes ----------------------------------------------------------------
 
 // GET /api/public-tours — every published tour, for the tile grid.

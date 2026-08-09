@@ -5,6 +5,44 @@ const { logActivity } = require('../lib/activityLogger');
 
 const router = express.Router();
 
+// --- public page switch ----------------------------------------------------
+// Withdraws the public tours page (the one behind the printed QR code) without
+// deleting anything. Off means every public tours endpoint answers 410 Gone,
+// so the QR resolves to a dead link; on restores the page exactly as it was.
+// Deliberately lives on the admin router so it sits behind the admin login.
+router.get('/public-switch', async (req, res) => {
+  try {
+    const row = await db.get(`SELECT * FROM public_switches WHERE key = 'public_tours'`);
+    res.json({ ok: true, enabled: !row || row.enabled === true, updated_by: row ? row.updated_by : null, updated_at: row ? row.updated_at : null });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.put('/public-switch', async (req, res) => {
+  const enabled = req.body.enabled === true || req.body.enabled === 'true';
+  try {
+    await db.run(`
+      INSERT INTO public_switches (key, enabled, updated_by, updated_at)
+      VALUES ('public_tours', $1, $2, NOW())
+      ON CONFLICT (key) DO UPDATE SET enabled = EXCLUDED.enabled, updated_by = EXCLUDED.updated_by, updated_at = NOW()
+    `, [enabled, req.user ? req.user.username : null]);
+    // Counted so the confirmation can say what is being withheld, not just
+    // that a flag moved.
+    const counts = await db.get(`
+      SELECT (SELECT COUNT(*)::int FROM pre_tours WHERE public_visible = TRUE AND status <> 'cancelled' AND tour_type IN ('pre','day')) AS tours,
+             (SELECT COUNT(*)::int FROM pre_tour_participants) AS signups
+    `);
+    logActivity(req.user, {
+      action: 'update', entityType: 'pre_tour',
+      label: enabled ? 'Public tours page reopened' : 'Public tours page withdrawn (QR link dead)'
+    });
+    res.json({ ok: true, enabled, ...counts });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ?type=pre|post filters to one kind of tour; omitting it returns both,
 // which is what the Delegates form's pre-tour dropdown and the stats
 // dashboard still want.

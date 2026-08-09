@@ -1099,6 +1099,25 @@ async function initSchema() {
   // migration; the admin UI dropdown is the source of truth for the standard list.
   await pool.query(`ALTER TABLE host_members ADD COLUMN IF NOT EXISTS leadership_role TEXT;`);
 
+  // --- Public page switches ---
+  // Simple on/off flags for publicly reachable pages, so a QR code already
+  // printed and circulating can be taken out of service from the admin panel
+  // without a deploy. Nothing is ever deleted by flipping one of these: the
+  // tours, their registrations and every co-registrant stay exactly as they
+  // are, and turning the flag back on restores the page unchanged.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS public_switches (
+      key TEXT PRIMARY KEY,
+      enabled BOOLEAN NOT NULL DEFAULT TRUE,
+      updated_by TEXT,
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+  await pool.query(`
+    INSERT INTO public_switches (key, enabled) VALUES ('public_tours', TRUE)
+    ON CONFLICT (key) DO NOTHING;
+  `);
+
   // --- GST invoicing -------------------------------------------------------
   // Single-row table holding the club's own statutory details. A table rather
   // than environment variables so the office can correct them without a
