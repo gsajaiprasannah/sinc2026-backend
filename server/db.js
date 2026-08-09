@@ -1118,6 +1118,32 @@ async function initSchema() {
     ON CONFLICT (key) DO NOTHING;
   `);
 
+  // One-time retirement of the circulated Pre-Tours QR code.
+  //
+  // The switch above defaults to open, but the QR needed taking out of service
+  // and the admin panel was not reachable at the time. This closes it exactly
+  // once, on the first deploy that carries this code, using a marker row to
+  // record that it has been done.
+  //
+  // The marker is what makes this safe: without it, every future restart would
+  // re-close the page and silently undo an admin who had chosen to reopen it.
+  // With it, this block never runs again and the switch belongs entirely to
+  // the button in the Pre Tours tab from here on.
+  const retiredMarker = await pool.query(`
+    INSERT INTO public_switches (key, enabled, updated_by)
+    VALUES ('public_tours_qr_retired_once', TRUE, 'migration')
+    ON CONFLICT (key) DO NOTHING
+    RETURNING key;
+  `);
+  if (retiredMarker.rowCount) {
+    await pool.query(`
+      UPDATE public_switches
+         SET enabled = FALSE, updated_by = 'migration (QR retired)', updated_at = NOW()
+       WHERE key = 'public_tours';
+    `);
+    console.log('Public tours page closed by one-time migration — reopen from Admin > Pre Tours if needed.');
+  }
+
   // --- GST invoicing -------------------------------------------------------
   // Single-row table holding the club's own statutory details. A table rather
   // than environment variables so the office can correct them without a
