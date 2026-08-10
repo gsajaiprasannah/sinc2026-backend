@@ -22,6 +22,19 @@ router.get('/voice-agent', async (req, res) => {
     const registrations = await db.all('SELECT reg_type FROM registrations');
     const happenings = await db.all('SELECT title, description, category, happened_at FROM happenings ORDER BY happened_at ASC');
 
+    // The programme. "What time does the AGM start", "who is speaking after
+    // lunch on the 14th" are the questions a delegate actually rings about, so
+    // the agenda belongs in the public-safe export — it contains no personal
+    // data beyond the names of people already billed as speaking publicly.
+    const schedule = await db.all(`
+      SELECT i.day_label, i.time_label AS block_time, i.title AS block_title, i.description AS block_description,
+             e.time_label AS event_time, e.title AS event_title, e.description AS event_description,
+             i.sort_order AS block_order, e.sort_order AS event_order
+        FROM itinerary_items i
+        LEFT JOIN agenda_events e ON e.itinerary_item_id = i.id
+       ORDER BY i.sort_order, i.id, e.sort_order, e.id
+    `);
+
     const totalMembers = clubs.reduce((s, c) => s + Number(c.members_count), 0);
     const totalRegs = registrations.length;
     const single = registrations.filter((r) => r.reg_type === 'single').length;
@@ -46,12 +59,68 @@ router.get('/voice-agent', async (req, res) => {
       });
     }
 
+    // --- programme -----------------------------------------------------------
+    // Grouped by day, then by block, so the agent can answer both "what is on
+    // Thursday" and "when is the AGM" without re-deriving structure from a flat
+    // list. The flat Q&A pairs below cover the phrasings people actually use.
+    const days = [];
+    const dayIndex = {};
+    for (const row of schedule) {
+      if (!dayIndex[row.day_label]) {
+        dayIndex[row.day_label] = { day: row.day_label, blocks: [] };
+        days.push(dayIndex[row.day_label]);
+      }
+      const day = dayIndex[row.day_label];
+      let block = day.blocks[day.blocks.length - 1];
+      if (!block || block.title !== row.block_title || block.time !== row.block_time) {
+        block = { time: row.block_time, title: row.block_title, description: row.block_description, events: [] };
+        day.blocks.push(block);
+      }
+      if (row.event_title) {
+        block.events.push({ time: row.event_time, title: row.event_title, description: row.event_description });
+      }
+    }
+
+    for (const d of days) {
+      const lines = d.blocks.map((b) => {
+        if (!b.events.length) return `${b.time ? b.time + ' — ' : ''}${b.title}`;
+        return b.events.map((e) => `${e.time} ${e.title}${e.description ? ' (' + e.description + ')' : ''}`).join('; ');
+      });
+      qa.push({
+        question: `What is the programme on ${d.day}?`,
+        answer: `On ${d.day}: ${lines.join('. ')}.`
+      });
+    }
+
+    // One pair per individual session, so "when does the Awards Night start"
+    // matches directly rather than relying on the agent parsing a whole day.
+    for (const d of days) {
+      for (const b of d.blocks) {
+        for (const e of b.events) {
+          qa.push({
+            question: `When is ${e.title}?`,
+            answer: `${e.title} is on ${d.day} at ${e.time}.${e.description ? ' ' + e.description : ''}`
+          });
+        }
+        if (!b.events.length && b.title) {
+          qa.push({
+            question: `When is ${b.title}?`,
+            answer: `${b.title} is on ${d.day}${b.time ? ', ' + b.time : ''}.${b.description ? ' ' + b.description : ''}`
+          });
+        }
+      }
+    }
+
     res.json({
       generated_at: new Date().toISOString(),
       note: 'Public-safe export: no personal contact/travel details or payment data are included. See server/routes/export.js for the exclusion list.',
-      summary: { totalClubs: clubs.length, totalMembers, totalRegistrations: totalRegs, single, double, congressOnly },
+      summary: {
+        totalClubs: clubs.length, totalMembers, totalRegistrations: totalRegs, single, double, congressOnly,
+        programme_days: days.length,
+        programme_sessions: schedule.filter((r) => r.event_title).length
+      },
       qa_pairs: qa,
-      raw: { clubs, happenings }
+      raw: { clubs, happenings, programme: days }
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
