@@ -3,11 +3,28 @@ const db = require('../db');
 
 const router = express.Router();
 
-// Public read — the congress dashboard renders the agenda from here.
+// Public read — the congress homepage renders the agenda from here.
+//
+// Each item now carries its `events`: the session-by-session programme held in
+// agenda_events (times, session titles, speakers). Previously only the block
+// summaries were returned, so the published itinerary said "Congress Sessions
+// — Day 1" and nothing about what was actually happening in it.
+//
+// One query for the events rather than one per item — this is the busiest
+// public endpoint on the site and it is read by every visitor to the homepage.
 router.get('/', async (req, res) => {
   try {
     const rows = await db.all('SELECT * FROM itinerary_items ORDER BY sort_order, id');
-    res.json(rows);
+    const events = await db.all(`
+      SELECT id, itinerary_item_id, time_label, title, description, organized_by, performed_by, duration_minutes
+        FROM agenda_events
+       ORDER BY itinerary_item_id, sort_order, id
+    `);
+    const byItem = {};
+    events.forEach((e) => {
+      (byItem[e.itinerary_item_id] = byItem[e.itinerary_item_id] || []).push(e);
+    });
+    res.json(rows.map((r) => ({ ...r, events: byItem[r.id] || [] })));
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
