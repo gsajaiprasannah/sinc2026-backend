@@ -36,7 +36,13 @@ const router = express.Router();
 // Series prefix per module. Separate books so an auditor can see at a glance
 // what a number refers to, and so a gap in one cannot be caused by another.
 const MODULES = {
-  registration: { series: 'REG', label: 'Delegate registration' },
+  // 'DEL' for delegate. Was 'REG' until 10 Aug 2026; any invoice already
+  // issued under SINC/<FY>/REG keeps its number, because an invoice number is
+  // permanent once raised. That leaves the REG book closed at whatever it had
+  // reached and DEL starting fresh at 0001 — two series in the ledger rather
+  // than a renumbered one, which is the correct way round: renumbering an
+  // issued invoice would break the copy the delegate already holds.
+  registration: { series: 'DEL', label: 'Delegate registration' },
   sponsor: { series: 'SPN', label: 'Sponsorship' },
   stall: { series: 'STL', label: 'Exhibition stall' },
   host_member: { series: 'HST', label: 'Host club contribution' }
