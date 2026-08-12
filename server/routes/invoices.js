@@ -310,9 +310,15 @@ router.post('/issue', async (req, res) => {
       `, [invoice_number, series, module, entityId,
           party.attention ? `${party.name} (Attn: ${party.attention})` : party.name,
           party.address, party.gstin,
-          // The stored state follows the place of supply actually applied, so
-          // the invoice can never show a state that disagrees with its own tax.
-          gst.place_of_supply_code || party.state_code, party.email,
+          // The party's OWN state, and nothing else. Left blank when we do not
+          // know it — writing a guess here previously made every B2C invoice
+          // claim the delegate was in Tamil Nadu.
+          //
+          // Where the supply is treated as taking place is a separate fact and
+          // lives in place_of_supply_code below. For an unregistered recipient
+          // that is 33 (the venue) by IGST Act s.12(7)(b), which is correct for
+          // the tax but is emphatically not the delegate's address.
+          party.state_code || null, party.email,
           req.body.description || party.description, org.default_sac, rate, basis,
           party.amount, gst.taxable_value, gst.cgst, gst.sgst, gst.igst, gst.total,
           req.user ? req.user.username : null,
