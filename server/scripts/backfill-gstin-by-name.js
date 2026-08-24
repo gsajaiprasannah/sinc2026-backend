@@ -184,6 +184,21 @@ function tokensOverlap(a, b) {
 }
 const last10 = (p) => String(p || '').replace(/\D/g, '').slice(-10);
 
+// Two names refer to the same person if they are equal once normalised, if one
+// contains the other ("Vempazhathrail Mathew Manoj" vs "Manoj"), or if they
+// share a distinctive surname-length token. Deliberately conservative: this
+// only ever gates a match that some other signal already proposed.
+function namesCompatible(a, b) {
+  const A = normName(a), B = normName(b);
+  if (!A || !B) return false;
+  if (A === B) return true;
+  if (A.includes(B) || B.includes(A)) return true;
+  const ta = new Set(A.split(' ').filter((t) => t.length > 3));
+  const tb = new Set(B.split(' ').filter((t) => t.length > 3));
+  for (const t of ta) if (tb.has(t)) return true;
+  return false;
+}
+
 async function main() {
   if (REVERT) return revert();
 
@@ -208,8 +223,13 @@ async function main() {
     const nName = normName(rec.name);
     let hit = null, how = '';
 
+    // Email alone is NOT sufficient. Colleagues share a company address — the
+    // spreadsheet has Nishant Mehta and Satyaprakash Gupta on one email — and
+    // an unguarded email match hands one person the other's GSTIN while
+    // rejecting their own as "already claimed". So an email hit is only
+    // accepted when the names are compatible too.
     const e = byEmail[rec.email];
-    if (rec.email && e && e.length === 1) { hit = e[0]; how = 'email'; }
+    if (rec.email && e && e.length === 1 && namesCompatible(e[0].name, rec.name)) { hit = e[0]; how = 'email+name'; }
 
     if (!hit && nName && byName[nName]) {
       const cands = byName[nName];
