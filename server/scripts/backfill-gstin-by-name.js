@@ -284,14 +284,41 @@ async function main() {
 
   if (!APPLY) { console.log('DRY RUN — nothing written. Re-run with --apply.\n'); return; }
 
+  // Anything the spreadsheet did not confirm came from the old phone-number
+  // backfill, which is precisely the mechanism we no longer trust. Writing the
+  // correct owner without clearing the stale copy leaves the same GSTIN on two
+  // delegates, so --clear-unconfirmed removes every value this run could not
+  // vouch for. state_code goes with it: it is derived from the GSTIN and is
+  // meaningless once the GSTIN is gone.
+  const CLEAR = process.argv.includes('--clear-unconfirmed');
+  const confirmedIds = new Set(plan.map((x) => x.p.id));
+  const stale = people.filter((p) => p.gstin && !confirmedIds.has(p.id));
+
+  if (stale.length) {
+    console.log(`${CLEAR ? 'CLEARING' : 'UNCONFIRMED (pass --clear-unconfirmed to remove)'} — ${stale.length} delegate(s) hold a GSTIN the spreadsheet does not support:`);
+    stale.slice(0, 40).forEach((p) => console.log(`   ${p.reg_number || '-'} #${p.id} ${p.name}  ${p.gstin}`));
+    if (stale.length > 40) console.log(`   ...and ${stale.length - 40} more`);
+    console.log('');
+  }
+
   await db.transaction(async (tx) => {
     await tx.run(`DROP TABLE IF EXISTS ${BACKUP}`);
     await tx.run(`CREATE TABLE ${BACKUP} AS SELECT id, name, gstin, state_code FROM participants`);
     for (const x of changed) {
       await tx.run('UPDATE participants SET gstin=$1, state_code=$2 WHERE id=$3', [x.rec.gstin, x.state, x.p.id]);
     }
+    // Keep state_code in step with the GSTIN for every confirmed delegate,
+    // including those whose GSTIN was already correct but whose state was blank.
+    for (const x of plan) {
+      await tx.run('UPDATE participants SET state_code=$1 WHERE id=$2 AND (state_code IS NULL OR state_code <> $1)', [x.state, x.p.id]);
+    }
+    if (CLEAR) {
+      for (const p of stale) {
+        await tx.run('UPDATE participants SET gstin=NULL, state_code=NULL WHERE id=$1', [p.id]);
+      }
+    }
   });
-  console.log(`\nDone. ${changed.length} delegate(s) updated. Backup in ${BACKUP}.`);
+  console.log(`\nDone. ${changed.length} delegate(s) updated${CLEAR ? `, ${stale.length} unconfirmed GSTIN(s) cleared` : ''}. Backup in ${BACKUP}.`);
   console.log('Revert with: node server/scripts/backfill-gstin-by-name.js --revert --apply\n');
 }
 
