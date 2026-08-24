@@ -282,8 +282,6 @@ async function main() {
     console.log('');
   }
 
-  if (!APPLY) { console.log('DRY RUN — nothing written. Re-run with --apply.\n'); return; }
-
   // Anything the spreadsheet did not confirm came from the old phone-number
   // backfill, which is precisely the mechanism we no longer trust. Writing the
   // correct owner without clearing the stale copy leaves the same GSTIN on two
@@ -300,6 +298,8 @@ async function main() {
     if (stale.length > 40) console.log(`   ...and ${stale.length - 40} more`);
     console.log('');
   }
+
+  if (!APPLY) { console.log('DRY RUN — nothing written. Re-run with --apply --clear-unconfirmed.\n'); return; }
 
   await db.transaction(async (tx) => {
     await tx.run(`DROP TABLE IF EXISTS ${BACKUP}`);
